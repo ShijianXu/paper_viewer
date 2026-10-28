@@ -1,0 +1,11 @@
+[project]
+name = "paper-viewer"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.162.0",
+    "httpx>=0.28.1",
+    "pypdf>=6.21.3",
+    "python-multipart>=0.0.32",
+    "uvicorn[standard]>=0.54.0",
+]
