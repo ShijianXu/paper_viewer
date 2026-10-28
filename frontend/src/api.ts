@@ -19,6 +19,18 @@ export type Message = {
   created_at: number
 }
 
+export const HIGHLIGHT_COLORS = ['yellow', 'green', 'blue', 'pink', 'orange', 'purple'] as const
+export type HighlightColor = (typeof HIGHLIGHT_COLORS)[number]
+
+/** A passage the user highlighted. ranges: [itemIndex, start, end] in the page's text items. */
+export type UserHighlight = {
+  id: number
+  page: number
+  ranges: [number, number, number][]
+  text: string
+  color: HighlightColor
+}
+
 export type StreamEvent =
   | { type: 'started' }
   | { type: 'text'; text: string }
@@ -49,7 +61,14 @@ const json = (method: string, body: unknown): RequestInit => ({
 export const api = {
   listSessions: () => request<Session[]>('/sessions'),
   createSession: () => request<Session>('/sessions', { method: 'POST' }),
-  getSession: (id: string) => request<{ session: Session; messages: Message[] }>(`/sessions/${id}`),
+  getSession: (id: string) =>
+    request<{ session: Session; messages: Message[]; highlights: UserHighlight[] }>(`/sessions/${id}`),
+  addHighlight: (id: string, h: Omit<UserHighlight, 'id'>) =>
+    request<UserHighlight>(`/sessions/${id}/highlights`, json('POST', h)),
+  recolorHighlight: (id: string, highlightId: number, color: HighlightColor) =>
+    request<UserHighlight>(`/sessions/${id}/highlights/${highlightId}`, json('PATCH', { color })),
+  deleteHighlight: (id: string, highlightId: number) =>
+    request<{ ok: boolean }>(`/sessions/${id}/highlights/${highlightId}`, { method: 'DELETE' }),
   renameSession: (id: string, title: string) => request<Session>(`/sessions/${id}`, json('PATCH', { title })),
   deleteSession: (id: string) => request<{ ok: boolean }>(`/sessions/${id}`, { method: 'DELETE' }),
   stop: (id: string) => request<{ stopped: boolean }>(`/sessions/${id}/stop`, { method: 'POST' }),

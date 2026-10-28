@@ -1,9 +1,18 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import { api, type Message, type Session, type ToolCall } from './api'
-import { buildPageIndex, citeHue, matchCitation, parseCitations, type Citation, type CitationMatch } from './citations'
+import { api, type HighlightColor, type Message, type Session, type ToolCall, type UserHighlight } from './api'
+import {
+  buildPageIndex,
+  citeHue,
+  matchCitation,
+  parseCitations,
+  resolveHighlight,
+  type Citation,
+  type CitationMatch,
+  type PageIndex,
+} from './citations'
 import MessageView from './MessageView'
-import PdfPane from './PdfPane'
+import PdfPane, { type NewHighlight, type ShownHighlight } from './PdfPane'
 import './App.css'
 
 type Draft = { text: string; tools: ToolCall[] }
@@ -19,13 +28,14 @@ export default function App() {
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
+  const [highlights, setHighlights] = useState<UserHighlight[]>([])
   const [draft, setDraft] = useState<Draft | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [split, setSplit] = useState(55) // PDF pane width in %
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null)
-  const [pageIndexes, setPageIndexes] = useState<ReturnType<typeof buildPageIndex>[] | null>(null)
+  const [pageIndexes, setPageIndexes] = useState<PageIndex[] | null>(null)
   const [activeMessageId, setActiveMessageId] = useState<number | null>(null)
   const [focus, setFocus] = useState<{ key: string; nonce: number } | null>(null)
   const currentIdRef = useRef(currentId)
@@ -39,6 +49,7 @@ export default function App() {
     if (currentIdRef.current !== id) return
     setSession(data.session)
     setMessages(data.messages)
+    setHighlights(data.highlights)
     const lastAnswer = [...data.messages].reverse().find((m) => m.role === 'assistant')
     setActiveMessageId(lastAnswer?.id ?? null)
   }, [])
@@ -56,6 +67,7 @@ export default function App() {
     setCurrentId(id)
     setSession(null)
     setMessages([])
+    setHighlights([])
     setDraft(null)
     setPdfDoc(null)
     setPageIndexes(null)
@@ -113,6 +125,45 @@ export default function App() {
     }
     return { hues, nextHue: citeHue(hues.size) }
   }, [messages])
+
+  // The user's own highlights, placed on the current PDF text.
+  const shownHighlights = useMemo<ShownHighlight[]>(() => {
+    if (!pageIndexes) return []
+    return highlights.flatMap((h) => {
+      const match = resolveHighlight(h, pageIndexes)
+      return match ? [{ id: h.id, color: h.color, match }] : []
+    })
+  }, [highlights, pageIndexes])
+
+  const createHighlight = useCallback(
+    (h: NewHighlight, color: HighlightColor) => {
+      const sid = currentIdRef.current
+      if (!sid) return
+      api
+        .addHighlight(sid, { ...h, color })
+        .then((saved) => currentIdRef.current === sid && setHighlights((all) => [...all, saved]))
+        .catch((e) => setError(`Could not save the highlight: ${e.message ?? e}`))
+    },
+    [],
+  )
+
+  const recolorHighlight = useCallback((id: number, color: HighlightColor) => {
+    const sid = currentIdRef.current
+    if (!sid) return
+    api
+      .recolorHighlight(sid, id, color)
+      .then((saved) => currentIdRef.current === sid && setHighlights((all) => all.map((h) => (h.id === id ? saved : h))))
+      .catch((e) => setError(`Could not change the highlight: ${e.message ?? e}`))
+  }, [])
+
+  const deleteHighlight = useCallback((id: number) => {
+    const sid = currentIdRef.current
+    if (!sid) return
+    api
+      .deleteHighlight(sid, id)
+      .then(() => currentIdRef.current === sid && setHighlights((all) => all.filter((h) => h.id !== id)))
+      .catch((e) => setError(`Could not remove the highlight: ${e.message ?? e}`))
+  }, [])
 
   const found = useCallback((key: string) => (pageIndexes ? matches.has(key) : undefined), [pageIndexes, matches])
 
@@ -275,7 +326,11 @@ export default function App() {
                   hues={hues}
                   activeMessageId={activeMessageId}
                   focus={focus}
+                  userHighlights={shownHighlights}
                   onDocument={setPdfDoc}
+                  onCreateHighlight={createHighlight}
+                  onRecolorHighlight={recolorHighlight}
+                  onDeleteHighlight={deleteHighlight}
                 />
               </ErrorBoundary>
             </div>

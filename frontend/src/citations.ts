@@ -42,7 +42,8 @@ function hidePartialCite(text: string): string {
 
 // ---------------------------------------------------------------- matching
 
-type PageIndex = {
+export type PageIndex = {
+  items: string[] // text of each item, as rendered in the text layer
   norm: string // letters and digits only, lowercased
   map: [number, number, number][] // per norm char: [itemIndex, charStart, charEnd] in the original item
 }
@@ -77,7 +78,7 @@ export function buildPageIndex(items: { str?: string }[]): PageIndex {
       map.push([itemIndex, start, end])
     })
   })
-  return { norm, map }
+  return { items: items.map((i) => i.str ?? ''), norm, map }
 }
 
 /** Find a range [from, to) of the normalized page text that matches the quote. */
@@ -122,6 +123,26 @@ export function matchCitation(c: Citation, pages: PageIndex[]): CitationMatch | 
   return null
 }
 
+/** Where a saved user highlight is now: its stored ranges if they still hold its
+ * text, else its text found again on the same page (e.g. after a pdf.js update
+ * split the text into items differently). */
+export function resolveHighlight(
+  h: { page: number; ranges: [number, number, number][]; text: string },
+  pages: PageIndex[],
+): CitationMatch | null {
+  const index = pages[h.page - 1]
+  if (!index) return null
+  const want = normalize(h.text)
+  const stored = h.ranges.map(([item, start, end]) => (index.items[item] ?? '').slice(start, end)).join('')
+  if (want && normalize(stored) === want) {
+    const ranges = new Map<number, [number, number][]>()
+    for (const [item, start, end] of h.ranges) ranges.set(item, [[start, end]])
+    return { page: h.page, ranges }
+  }
+  const hit = locate(index.norm, want)
+  return hit ? { page: h.page, ranges: toRanges(index, hit) } : null
+}
+
 // ---------------------------------------------------------------- colors
 
 // Hues for the 1st, 2nd, ... answer with quotes: well separated, and readable as
@@ -136,31 +157,51 @@ export function citeHue(answerIndex: number): number {
 
 // ---------------------------------------------------------------- rendering
 
-export type Mark = { key: string; active: boolean; hue: number }
+export type Mark = { key: string; active: boolean; hue: number } // a citation of Claude's
+export type UserMark = { id: number; color: string } // a highlight made by the user
+
+export type ItemMarks = {
+  cites: { range: [number, number]; mark: Mark }[]
+  users: { range: [number, number]; mark: UserMark }[]
+}
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-/** HTML for one text item with <mark> elements around the highlighted ranges. */
-export function markItem(str: string, marks: { range: [number, number]; mark: Mark }[]): string {
-  if (!marks.length) return escapeHtml(str)
-  // Per character, the mark to show; an active citation wins over a faded one.
-  const owner: (Mark | null)[] = new Array(str.length).fill(null)
-  for (const { range, mark } of marks) {
+/** HTML for one text item, with <mark> elements around the highlighted ranges.
+ *
+ * Only <mark> elements are used: pdf.js positions every <span> of the text
+ * layer absolutely, so spans can't be nested. Each item starts with an empty
+ * <mark class="ti"> carrying its index, so a selection can be mapped back to
+ * the item. User highlights wrap citation highlights where they overlap. */
+export function markItem(itemIndex: number, str: string, { cites, users }: ItemMarks): string {
+  const tag = `<mark class="ti" data-i="${itemIndex}"></mark>`
+  if (!cites.length && !users.length) return tag + escapeHtml(str)
+  // Per character, the citation to show (an active one wins over a faded one)
+  // and the user highlight (the newest wins).
+  const cite: (Mark | null)[] = new Array(str.length).fill(null)
+  const user: (UserMark | null)[] = new Array(str.length).fill(null)
+  for (const { range, mark } of cites) {
     for (let i = range[0]; i < Math.min(range[1], str.length); i++) {
-      if (!owner[i] || (mark.active && !owner[i]!.active)) owner[i] = mark
+      if (!cite[i] || (mark.active && !cite[i]!.active)) cite[i] = mark
     }
   }
-  let html = ''
+  for (const { range, mark } of users) {
+    for (let i = range[0]; i < Math.min(range[1], str.length); i++) {
+      if (!user[i] || mark.id > user[i]!.id) user[i] = mark
+    }
+  }
+  let html = tag
   let i = 0
   while (i < str.length) {
-    const m = owner[i]
+    const c = cite[i]
+    const u = user[i]
     let j = i + 1
-    while (j < str.length && owner[j] === m) j++
-    const text = escapeHtml(str.slice(i, j))
-    html += m
-      ? `<mark class="cite-mark${m.active ? ' active' : ''}" data-cite="${m.key}" style="--h: ${m.hue}">${text}</mark>`
-      : text
+    while (j < str.length && cite[j] === c && user[j] === u) j++
+    let text = escapeHtml(str.slice(i, j))
+    if (c) text = `<mark class="cite-mark${c.active ? ' active' : ''}" data-cite="${c.key}" style="--h: ${c.hue}">${text}</mark>`
+    if (u) text = `<mark class="user-mark hl-${u.color}" data-hl="${u.id}">${text}</mark>`
+    html += text
     i = j
   }
   return html

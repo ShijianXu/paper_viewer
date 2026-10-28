@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import claude_runner, config, db, papers
 
@@ -50,6 +50,7 @@ def get_session(session_id: str) -> dict:
     return {
         "session": session | {"running": claude_runner.is_running(session_id)},
         "messages": db.list_messages(session_id),
+        "highlights": db.list_highlights(session_id),
     }
 
 
@@ -112,6 +113,54 @@ def get_pdf(session_id: str) -> FileResponse:
         raise HTTPException(404, "No paper in this session")
     # Serve the backup: it is the file the user opened, whatever Claude did in its folder.
     return FileResponse(config.original_pdf(session_id), media_type="application/pdf")
+
+
+# ---------------------------------------------------------------- user highlights
+
+HIGHLIGHT_COLORS = {"yellow", "green", "blue", "pink", "orange", "purple"}
+
+
+class NewHighlight(BaseModel):
+    page: int = Field(ge=1)
+    ranges: list[tuple[int, int, int]] = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=20_000)
+    color: str
+
+
+class HighlightColor(BaseModel):
+    color: str
+
+
+def _check_color(color: str) -> None:
+    if color not in HIGHLIGHT_COLORS:
+        raise HTTPException(400, f"Unknown color; use one of {sorted(HIGHLIGHT_COLORS)}")
+
+
+@app.post("/api/sessions/{session_id}/highlights")
+def add_highlight(session_id: str, body: NewHighlight) -> dict:
+    session = _require(session_id)
+    if not session["has_pdf"]:
+        raise HTTPException(400, "This session has no paper")
+    _check_color(body.color)
+    return db.add_highlight(session_id, body.page, [list(r) for r in body.ranges], body.text, body.color)
+
+
+@app.patch("/api/sessions/{session_id}/highlights/{highlight_id}")
+def recolor_highlight(session_id: str, highlight_id: int, body: HighlightColor) -> dict:
+    _require(session_id)
+    _check_color(body.color)
+    highlight = db.update_highlight(session_id, highlight_id, body.color)
+    if not highlight:
+        raise HTTPException(404, "Highlight not found")
+    return highlight
+
+
+@app.delete("/api/sessions/{session_id}/highlights/{highlight_id}")
+def delete_highlight(session_id: str, highlight_id: int) -> dict:
+    _require(session_id)
+    if not db.delete_highlight(session_id, highlight_id):
+        raise HTTPException(404, "Highlight not found")
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- chat

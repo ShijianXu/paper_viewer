@@ -226,3 +226,51 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
 @keyframes flash {
   0%, 40% { background: hsl(var(--h, 48) 95% 50% / 0.8); box-shadow: 0 0 0 3px hsl(var(--h, 48) 95% 50% / 0.5); }
 }
+
+/* ---------------------------------------------------------------- user highlights */
+
+.hl-yellow { --uc: #ffd400; }
+.hl-green { --uc: #4cd964; }
+.hl-blue { --uc: #4aa8ff; }
+.hl-pink { --uc: #ff6fae; }
+.hl-orange { --uc: #ff9a3c; }
+.hl-purple { --uc: #a77bff; }
+
+/* Marker-style fill plus an underline, so the user's highlights stand apart
+   from Claude's plain citation fills; where both overlap, both show. */
+.textLayer mark.user-mark {
+  color: transparent;
+  background: color-mix(in srgb, var(--uc) 40%, transparent);
+  box-shadow: inset 0 -0.12em var(--uc);
+  border-radius: 1px;
+  padding: 0;
+  cursor: pointer;
+}
+.textLayer mark.ti { display: none; }
+
+.pdf-toolbar .hint { margin-right: 8px; }
+
+.highlight-bar {
+  position: fixed;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+.highlight-bar .swatch {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+  background: var(--uc);
+  box-shadow: 0 0 0 1px var(--border);
+}
+.highlight-bar .swatch:hover:not(:disabled) { background: var(--uc); transform: scale(1.15); }
+.highlight-bar .swatch.current { box-shadow: 0 0 0 2px var(--fg); }
+.highlight-bar .delete { margin-left: 2px; font-size: 15px; }

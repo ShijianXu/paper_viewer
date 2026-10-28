@@ -112,7 +112,17 @@ When an answer relies on the paper, Claude quotes the passages. In the chat, eac
 
 For questions that need outside information, Claude can search the web, fetch pages, or run commands in the session folder (see [Tool permissions](#tool-permissions)).
 
-### 6. Saved sessions
+### 6. Your own highlights
+
+You can highlight the PDF yourself:
+
+- Select text with the mouse (drag, or double-click a word). A small bar with 6 colours appears under the selection: yellow, green, blue, pink, orange, purple. Click one to highlight; Escape or a click elsewhere cancels.
+- Click one of your highlights to change its colour or remove it (🗑).
+- Your highlights are a marker-style fill with an underline, so they look different from Claude's quote highlights. Where both overlap, both are visible.
+- A selection that runs onto the next page is cut at the end of the first page.
+- Highlights are saved with the session and come back when you reopen it. Each is stored by its position in the page's text and by the selected text; if the position no longer matches (for example after a PDF.js update), it is found again by its text.
+
+### 7. Saved sessions
 
 Every session is saved automatically: the paper, all messages and the tools used.
 
@@ -177,13 +187,16 @@ frontend/src/
 |---|---|
 | `GET /api/sessions` | List sessions, newest first |
 | `POST /api/sessions` | Create an empty session |
-| `GET /api/sessions/{id}` | Session and its messages |
+| `GET /api/sessions/{id}` | Session, its messages and its user highlights |
 | `PATCH /api/sessions/{id}` | Rename (`{"title": ...}`) |
 | `DELETE /api/sessions/{id}` | Delete the session, its folder and its PDF |
 | `POST /api/sessions/{id}/pdf` | Upload the paper (multipart `file`); only once per session |
 | `GET /api/sessions/{id}/pdf` | The paper |
 | `POST /api/sessions/{id}/messages` | Send `{"text": ...}`; the response is a stream of JSON lines: `text` (a piece of the answer), `tool` (a tool call, including `Download`), `pdf` (the paper was downloaded from a link), `done` (the saved answer) |
 | `POST /api/sessions/{id}/stop` | Stop the current answer |
+| `POST /api/sessions/{id}/highlights` | Save a user highlight (`page`, `ranges`, `text`, `color`) |
+| `PATCH /api/sessions/{id}/highlights/{hid}` | Change its colour (`{"color": ...}`) |
+| `DELETE /api/sessions/{id}/highlights/{hid}` | Remove it |
 
 ### Talking to the Claude CLI
 
@@ -252,7 +265,7 @@ When a call is refused, Claude sees why and can try another way.
 
 ```
 ~/.paper_viewer/
-├── paper_viewer.db          # SQLite: sessions, messages
+├── paper_viewer.db          # SQLite: sessions, messages, highlights
 ├── originals/
 │   └── <session-id>.pdf     # untouched copy of the paper (outside the sandbox)
 └── papers/
@@ -264,6 +277,7 @@ When a call is refused, Claude sees why and can try another way.
 - The PDF is uploaded through the browser and copied here, so a session still opens if the original file is moved or deleted.
 - `sessions`: id, title, original file name, SHA-256 of the PDF, Claude session id, whether Claude has been told about the PDF, times.
 - `messages`: id, session id, role, text, tools used, error (e.g. "Stopped by user."), time. Quotes are part of the message text and are found in the PDF again when a session is opened.
+- `highlights`: id, session id, page, ranges (`[itemIndex, start, end]` in the page's text items), selected text, colour, time.
 - Claude's own conversation history is kept by the CLI under `~/.claude/projects/`.
 - Deleting a session removes its rows, its folder and its backup PDF.
 

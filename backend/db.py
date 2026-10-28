@@ -29,6 +29,16 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, id);
+CREATE TABLE IF NOT EXISTS highlights (       -- made by the user with the mouse
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    page        INTEGER NOT NULL,             -- 1-based
+    ranges      TEXT NOT NULL,                -- JSON [[itemIndex, start, end], ...] in the page's text items
+    text        TEXT NOT NULL,                -- the selected text, to re-find it if the ranges don't match
+    color       TEXT NOT NULL,
+    created_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS highlights_session ON highlights(session_id, id);
 """
 
 
@@ -104,6 +114,51 @@ def list_messages(session_id: str) -> list[dict]:
             "SELECT * FROM messages WHERE session_id = ? ORDER BY id", (session_id,)
         ).fetchall()
     return [_message(r) for r in rows]
+
+
+def _highlight(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["ranges"] = json.loads(d["ranges"])
+    return d
+
+
+def list_highlights(session_id: str) -> list[dict]:
+    with connect() as c:
+        rows = c.execute(
+            "SELECT * FROM highlights WHERE session_id = ? ORDER BY id", (session_id,)
+        ).fetchall()
+    return [_highlight(r) for r in rows]
+
+
+def add_highlight(session_id: str, page: int, ranges: list, text: str, color: str) -> dict:
+    with connect() as c:
+        cur = c.execute(
+            "INSERT INTO highlights (session_id, page, ranges, text, color, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, page, json.dumps(ranges), text, color, time.time()),
+        )
+        row = c.execute("SELECT * FROM highlights WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return _highlight(row)
+
+
+def update_highlight(session_id: str, highlight_id: int, color: str) -> dict | None:
+    with connect() as c:
+        c.execute(
+            "UPDATE highlights SET color = ? WHERE id = ? AND session_id = ?",
+            (color, highlight_id, session_id),
+        )
+        row = c.execute(
+            "SELECT * FROM highlights WHERE id = ? AND session_id = ?", (highlight_id, session_id)
+        ).fetchone()
+    return _highlight(row) if row else None
+
+
+def delete_highlight(session_id: str, highlight_id: int) -> bool:
+    with connect() as c:
+        cur = c.execute(
+            "DELETE FROM highlights WHERE id = ? AND session_id = ?", (highlight_id, session_id)
+        )
+    return cur.rowcount > 0
 
 
 def add_message(
