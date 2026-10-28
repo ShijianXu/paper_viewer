@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, type CSSProperties } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -10,12 +10,13 @@ import { parseCitations, type Citation } from './citations'
 type Props = {
   message: Pick<Message, 'id' | 'role' | 'text' | 'tools' | 'error'>
   streaming?: boolean
+  hue?: number // highlight color of this answer's quotes
   active?: boolean
   found?: (key: string) => boolean | undefined // undefined: not checked yet
   onCite?: (c: Citation) => void
 }
 
-function MessageView({ message, streaming, active, found, onCite }: Props) {
+function MessageView({ message, streaming, hue, active, found, onCite }: Props) {
   const { markdown, citations } = useMemo(
     () => parseCitations(message.text, message.id, streaming),
     [message.text, message.id, streaming],
@@ -60,7 +61,7 @@ function MessageView({ message, streaming, active, found, onCite }: Props) {
   }
 
   return (
-    <div className={`msg assistant${active ? ' active' : ''}`}>
+    <div className={`msg assistant${active ? ' active' : ''}`} style={hue === undefined ? undefined : ({ '--h': hue } as CSSProperties)}>
       {message.tools.length > 0 && <Tools tools={message.tools} running={streaming} />}
       {markdown && (
         <div className="markdown">

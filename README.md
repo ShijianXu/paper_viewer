@@ -105,7 +105,8 @@ Drag the divider to resize the panes.
 
 When an answer relies on the paper, Claude quotes the passages. In the chat, each quote appears inline as “quoted text”<sup>p.4</sup>:
 
-- The quote is highlighted in the PDF. Highlights of the selected answer are strong; those of other answers are faded.
+- The quote is highlighted in the PDF. **Each answer has its own color**: all highlights of one answer, its quote chips in the chat and the bar beside it share that color, and each new answer gets a color not used before in the session. Highlights of the selected answer are strong; those of other answers are faded.
+- Colors: the first 10 answers with quotes get 10 hand-picked, well-separated hues (yellow, green, blue, pink, orange, purple, teal, red, lime, indigo). After that, each new hue is 137.5° (the golden angle) around the color wheel from the previous one, which keeps consecutive answers far apart; with more than 10 answers, some colors are similar to earlier ones.
 - Clicking a quote selects that answer, scrolls the PDF to the passage and flashes it.
 - If the app can't find a quote in the PDF (Claude paraphrased instead of quoting), the quote is shown without highlight and its page number is struck through. Hover for details.
 

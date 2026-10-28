@@ -9,10 +9,7 @@
   --accent-fg: #ffffff;
   --user-bubble: #efeee9;
   --danger: #b3261e;
-  --mark: rgba(255, 196, 0, 0.22);
-  --mark-active: rgba(255, 170, 0, 0.5);
   --cite-bg: #f3e3da;
-  --cite-fg: #8a3d1f;
   --code-bg: #f1f0ec;
   color-scheme: light;
 }
@@ -29,10 +26,7 @@
     --accent-fg: #1d1d1b;
     --user-bubble: #2f2f2c;
     --danger: #f2827a;
-    --mark: rgba(255, 196, 0, 0.25);
-    --mark-active: rgba(255, 170, 0, 0.55);
     --cite-bg: #4a2f24;
-    --cite-fg: #f6c2a8;
     --code-bg: #2a2a27;
     color-scheme: dark;
   }
@@ -148,7 +142,7 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
   overflow-wrap: anywhere;
 }
 .msg.assistant { border-left: 3px solid transparent; padding-left: 10px; margin-left: -13px; }
-.msg.assistant.active { border-left-color: var(--accent); }
+.msg.assistant.active { border-left-color: hsl(var(--h, 20) 80% 50%); }
 .msg-error { color: var(--danger); font-size: 13px; margin-top: 6px; white-space: pre-wrap; }
 .thinking { color: var(--muted); font-style: italic; }
 
@@ -168,18 +162,20 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
 .markdown a { color: var(--accent); }
 .markdown .katex-display { overflow-x: auto; overflow-y: hidden; }
 
+/* Quote chips take the color of their answer's highlights (--h, set per message). */
 .cite {
   cursor: pointer;
-  background: var(--cite-bg);
-  color: var(--cite-fg);
+  background: hsl(var(--h, 20) 90% 55% / 0.25);
+  color: inherit;
+  border-bottom: 2px solid hsl(var(--h, 20) 85% 45%);
   border-radius: 4px;
   padding: 0 3px;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
 .cite sup { font-size: 0.7em; font-weight: 700; margin-left: 2px; }
-.cite:hover, .cite:focus-visible { background: var(--accent); color: var(--accent-fg); outline: none; }
-.cite.missing { background: transparent; color: inherit; cursor: help; }
+.cite:hover, .cite:focus-visible { background: hsl(var(--h, 20) 90% 55% / 0.5); outline: none; }
+.cite.missing { background: transparent; border-bottom: 1px dotted var(--muted); cursor: help; }
 .cite.missing sup { color: var(--muted); text-decoration: line-through; }
 
 .composer { border-top: 1px solid var(--border); padding: 12px 20px 14px; }
@@ -217,14 +213,16 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
 .pdf-page-placeholder { background: white; }
 .pdf-message { padding: 40px; color: var(--muted); }
 
+/* Each answer's highlights use its own hue (--h, set on the mark); the
+   selected answer is strong, the others faded. */
 .textLayer mark.cite-mark {
   color: transparent;
-  background: var(--mark);
+  background: hsl(var(--h, 48) 95% 55% / 0.2);
   border-radius: 2px;
   padding: 0;
 }
-.textLayer mark.cite-mark.active { background: var(--mark-active); }
+.textLayer mark.cite-mark.active { background: hsl(var(--h, 48) 95% 55% / 0.5); }
 .textLayer mark.cite-mark.flash { animation: flash 1.4s ease-out; }
 @keyframes flash {
-  0%, 40% { background: rgba(255, 120, 0, 0.75); box-shadow: 0 0 0 3px rgba(255, 120, 0, 0.5); }
+  0%, 40% { background: hsl(var(--h, 48) 95% 50% / 0.8); box-shadow: 0 0 0 3px hsl(var(--h, 48) 95% 50% / 0.5); }
 }

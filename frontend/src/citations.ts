@@ -122,9 +122,21 @@ export function matchCitation(c: Citation, pages: PageIndex[]): CitationMatch | 
   return null
 }
 
+// ---------------------------------------------------------------- colors
+
+// Hues for the 1st, 2nd, ... answer with quotes: well separated, and readable as
+// translucent highlights on a white page. After these, the golden angle keeps
+// each new hue far from the ones just before it.
+const HUES = [48, 130, 205, 330, 25, 270, 175, 0, 90, 235]
+
+export function citeHue(answerIndex: number): number {
+  if (answerIndex < HUES.length) return HUES[answerIndex]
+  return Math.round((HUES[HUES.length - 1] + (answerIndex - HUES.length + 1) * 137.508) % 360)
+}
+
 // ---------------------------------------------------------------- rendering
 
-export type Mark = { key: string; active: boolean }
+export type Mark = { key: string; active: boolean; hue: number }
 
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -147,7 +159,7 @@ export function markItem(str: string, marks: { range: [number, number]; mark: Ma
     while (j < str.length && owner[j] === m) j++
     const text = escapeHtml(str.slice(i, j))
     html += m
-      ? `<mark class="cite-mark${m.active ? ' active' : ''}" data-cite="${m.key}">${text}</mark>`
+      ? `<mark class="cite-mark${m.active ? ' active' : ''}" data-cite="${m.key}" style="--h: ${m.hue}">${text}</mark>`
       : text
     i = j
   }

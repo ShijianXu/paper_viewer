@@ -1,7 +1,7 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { api, type Message, type Session, type ToolCall } from './api'
-import { buildPageIndex, matchCitation, parseCitations, type Citation, type CitationMatch } from './citations'
+import { buildPageIndex, citeHue, matchCitation, parseCitations, type Citation, type CitationMatch } from './citations'
 import MessageView from './MessageView'
 import PdfPane from './PdfPane'
 import './App.css'
@@ -104,6 +104,16 @@ export default function App() {
     return out
   }, [messages, pageIndexes])
 
+  // One highlight color per answer that quotes the paper, in order; the answer
+  // being written gets the next one.
+  const { hues, nextHue } = useMemo(() => {
+    const hues = new Map<number, number>()
+    for (const m of messages) {
+      if (m.role === 'assistant' && parseCitations(m.text, m.id).citations.length) hues.set(m.id, citeHue(hues.size))
+    }
+    return { hues, nextHue: citeHue(hues.size) }
+  }, [messages])
+
   const found = useCallback((key: string) => (pageIndexes ? matches.has(key) : undefined), [pageIndexes, matches])
 
   const onCite = useCallback((c: Citation) => {
@@ -186,6 +196,8 @@ export default function App() {
       session={session}
       messages={messages}
       draft={draft}
+      hues={hues}
+      nextHue={nextHue}
       busy={busy}
       uploading={uploading}
       activeMessageId={activeMessageId}
@@ -260,6 +272,7 @@ export default function App() {
                 <PdfPane
                   url={api.pdfUrl(session.id)}
                   matches={matches}
+                  hues={hues}
                   activeMessageId={activeMessageId}
                   focus={focus}
                   onDocument={setPdfDoc}
@@ -312,6 +325,8 @@ type ChatProps = {
   session: Session | null
   messages: Message[]
   draft: Draft | null
+  hues: Map<number, number>
+  nextHue: number
   busy: boolean
   uploading: boolean
   activeMessageId: number | null
@@ -322,7 +337,7 @@ type ChatProps = {
   onOpenPdf: (file: File) => void
 }
 
-function ChatPane({ session, messages, draft, busy, uploading, activeMessageId, found, onCite, onSend, onStop, onOpenPdf }: ChatProps) {
+function ChatPane({ session, messages, draft, hues, nextHue, busy, uploading, activeMessageId, found, onCite, onSend, onStop, onOpenPdf }: ChatProps) {
   const [text, setText] = useState('')
   const [dragOver, setDragOver] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -395,9 +410,9 @@ function ChatPane({ session, messages, draft, busy, uploading, activeMessageId, 
           </div>
         )}
         {messages.map((m) => (
-          <MessageView key={m.id} message={m} active={m.id === activeMessageId} found={found} onCite={onCite} />
+          <MessageView key={m.id} message={m} hue={hues.get(m.id)} active={m.id === activeMessageId} found={found} onCite={onCite} />
         ))}
-        {draft && <MessageView message={{ id: -1, role: 'assistant', error: null, ...draft }} streaming />}
+        {draft && <MessageView message={{ id: -1, role: 'assistant', error: null, ...draft }} hue={nextHue} streaming />}
         {!draft && session?.running && <div className="thinking">Claude is still answering…</div>}
       </div>
 

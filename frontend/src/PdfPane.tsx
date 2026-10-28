@@ -11,6 +11,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.m
 type Props = {
   url: string
   matches: Map<string, CitationMatch>
+  hues: Map<number, number> // highlight hue per answer (message id)
   activeMessageId: number | null
   focus: { key: string; nonce: number } | null
   onDocument: (pdf: PDFDocumentProxy | null) => void
@@ -18,7 +19,7 @@ type Props = {
 
 const ZOOMS = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
 
-export default function PdfPane({ url, matches, activeMessageId, focus, onDocument }: Props) {
+export default function PdfPane({ url, matches, hues, activeMessageId, focus, onDocument }: Props) {
   const scroller = useRef<HTMLDivElement>(null)
   const [numPages, setNumPages] = useState(0)
   const [width, setWidth] = useState(600)
@@ -38,7 +39,8 @@ export default function PdfPane({ url, matches, activeMessageId, focus, onDocume
   const marksByPage = useMemo(() => {
     const byPage = new Map<number, Map<number, { range: [number, number]; mark: Mark }[]>>()
     for (const [key, m] of matches) {
-      const mark = { key, active: key.startsWith(`${activeMessageId}:`) }
+      const messageId = Number(key.split(':')[0])
+      const mark = { key, active: messageId === activeMessageId, hue: hues.get(messageId) ?? 48 }
       const items = byPage.get(m.page) ?? new Map()
       for (const [item, ranges] of m.ranges) {
         const list = items.get(item) ?? []
@@ -48,7 +50,7 @@ export default function PdfPane({ url, matches, activeMessageId, focus, onDocume
       byPage.set(m.page, items)
     }
     return byPage
-  }, [matches, activeMessageId])
+  }, [matches, hues, activeMessageId])
 
   const textRenderer = useCallback(
     ({ pageNumber, itemIndex, str }: { pageNumber: number; itemIndex: number; str: string }) =>
