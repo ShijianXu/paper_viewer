@@ -122,7 +122,15 @@ You can highlight the PDF yourself:
 - A selection that runs onto the next page is cut at the end of the first page.
 - Highlights are saved with the session and come back when you reopen it. Each is stored by its position in the page's text and by the selected text; if the position no longer matches (for example after a PDF.js update), it is found again by its text.
 
-### 7. Saved sessions
+### 7. Ask Claude about a passage
+
+- Select text in the PDF (or click one of your highlights) and click **💬 Ask Claude** in the bar that appears.
+- The passage is attached to your next message: the chat box shows "Asking about p.4 “…”" (× removes it), and the passage gets a dashed outline in the PDF while you type.
+- Type your question and send. With an empty box, the question is "Explain this passage."
+- Claude receives the passage with its page number, followed by your question.
+- The sent question shows the passage above your text. Click it to scroll the PDF to the passage, which is outlined for a few seconds.
+
+### 8. Saved sessions
 
 Every session is saved automatically: the paper, all messages and the tools used.
 
@@ -192,7 +200,7 @@ frontend/src/
 | `DELETE /api/sessions/{id}` | Delete the session, its folder and its PDF |
 | `POST /api/sessions/{id}/pdf` | Upload the paper (multipart `file`); only once per session |
 | `GET /api/sessions/{id}/pdf` | The paper |
-| `POST /api/sessions/{id}/messages` | Send `{"text": ...}`; the response is a stream of JSON lines: `text` (a piece of the answer), `tool` (a tool call, including `Download`), `pdf` (the paper was downloaded from a link), `done` (the saved answer) |
+| `POST /api/sessions/{id}/messages` | Send `{"text": ..., "selection": {"page", "ranges", "text"} or null}`; the response is a stream of JSON lines: `text` (a piece of the answer), `tool` (a tool call, including `Download`), `pdf` (the paper was downloaded from a link), `done` (the saved answer) |
 | `POST /api/sessions/{id}/stop` | Stop the current answer |
 | `POST /api/sessions/{id}/highlights` | Save a user highlight (`page`, `ranges`, `text`, `color`) |
 | `PATCH /api/sessions/{id}/highlights/{hid}` | Change its colour (`{"color": ...}`) |
@@ -211,6 +219,7 @@ claude -p --output-format stream-json --verbose --include-partial-messages \
 ```
 
 - The message is passed on standard input; the working directory is the session folder.
+- If the question is about a selected passage, the message to Claude starts with `[The user selected this passage on page N of the paper and asks about it:]` and the passage as a quote.
 - If the session has no paper and the message has links, the backend first tries to download the paper (see [Paper links](#paper-links)). This happens in the backend, not in Claude's sandbox, which has no network.
 - With the first message after a paper is opened, the backend adds a note telling Claude that the paper is `./paper.pdf`.
 - Follow-up messages use `--resume`, so Claude keeps the paper and the conversation in context.
@@ -276,7 +285,7 @@ When a call is refused, Claude sees why and can try another way.
 
 - The PDF is uploaded through the browser and copied here, so a session still opens if the original file is moved or deleted.
 - `sessions`: id, title, original file name, SHA-256 of the PDF, Claude session id, whether Claude has been told about the PDF, times.
-- `messages`: id, session id, role, text, tools used, error (e.g. "Stopped by user."), time. Quotes are part of the message text and are found in the PDF again when a session is opened.
+- `messages`: id, session id, role, text, tools used, error (e.g. "Stopped by user."), the PDF passage a question is about (page, ranges, text), time. Quotes are part of the message text and are found in the PDF again when a session is opened.
 - `highlights`: id, session id, page, ranges (`[itemIndex, start, end]` in the page's text items), selected text, colour, time.
 - Claude's own conversation history is kept by the CLI under `~/.claude/projects/`.
 - Deleting a session removes its rows, its folder and its backup PDF.

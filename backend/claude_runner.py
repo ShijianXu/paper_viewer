@@ -82,8 +82,19 @@ def _announce_pdf(session: dict) -> str:
     )
 
 
+def _with_selection(text: str, selection: dict | None) -> str:
+    """The user's question, preceded by the PDF passage it is about (if any)."""
+    if not selection:
+        return text
+    quoted = "\n".join(f"> {line}" for line in selection["text"].splitlines())
+    return (
+        f"[The user selected this passage on page {selection['page']} of the paper and asks about it:]\n"
+        f"{quoted}\n\n{text}"
+    )
+
+
 def _transcript(messages: list[dict], limit: int = 40_000) -> str:
-    parts = [f"{m['role'].upper()}:\n{m['text']}" for m in messages]
+    parts = [f"{m['role'].upper()}:\n{_with_selection(m['text'], m.get('selection'))}" for m in messages]
     text = "\n\n".join(parts)
     return text[-limit:]
 
@@ -114,12 +125,12 @@ def is_running(session_id: str) -> bool:
     return session_id in RUNS
 
 
-def start(session_id: str, user_text: str) -> Run:
+def start(session_id: str, user_text: str, selection: dict | None = None) -> Run:
     """Save the user message and start a background turn. Caller checks is_running first."""
     run = Run(session_id)
     RUNS[session_id] = run
-    db.add_message(session_id, "user", user_text)
-    run.task = asyncio.create_task(_turn(run, user_text))
+    db.add_message(session_id, "user", user_text, selection=selection)
+    run.task = asyncio.create_task(_turn(run, user_text, selection))
     return run
 
 
@@ -133,8 +144,9 @@ async def stop(session_id: str) -> bool:
     return True
 
 
-async def _turn(run: Run, user_text: str) -> None:
+async def _turn(run: Run, user_text: str, selection: dict | None) -> None:
     sid = run.session_id
+    question = _with_selection(user_text, selection)
     state = {"text": "", "tools": []}
     error = None
     try:
@@ -147,7 +159,7 @@ async def _turn(run: Run, user_text: str) -> None:
         prefix = notes + ("" if session["pdf_announced"] or not session["has_pdf"] else _announce_pdf(session))
 
         if session["claude_session_id"]:
-            ok, error = await _invoke(run, prefix + user_text, state, resume=session["claude_session_id"])
+            ok, error = await _invoke(run, prefix + question, state, resume=session["claude_session_id"])
             if not ok and error and "No conversation found" in error and not state["text"]:
                 # Claude's own history is gone: start over with our saved transcript.
                 error = None
@@ -157,11 +169,11 @@ async def _turn(run: Run, user_text: str) -> None:
                     "Here is the saved transcript:]\n\n"
                     f"{_transcript(history)}\n\n[End of transcript. The user's new message follows.]\n\n"
                     + (_announce_pdf(session) if session["has_pdf"] else "")
-                    + user_text
+                    + question
                 )
                 ok, error = await _invoke(run, prompt, state, new_id=str(uuid.uuid4()))
         else:
-            ok, error = await _invoke(run, prefix + user_text, state, new_id=str(uuid.uuid4()))
+            ok, error = await _invoke(run, prefix + question, state, new_id=str(uuid.uuid4()))
 
         if ok and session["has_pdf"]:
             db.update_session(sid, pdf_announced=1)

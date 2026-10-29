@@ -4,19 +4,20 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
-import type { Message, ToolCall } from './api'
+import type { Message, PdfSelection, ToolCall } from './api'
 import { parseCitations, type Citation } from './citations'
 
 type Props = {
-  message: Pick<Message, 'id' | 'role' | 'text' | 'tools' | 'error'>
+  message: Pick<Message, 'id' | 'role' | 'text' | 'tools' | 'error'> & { selection?: PdfSelection | null }
   streaming?: boolean
   hue?: number // highlight color of this answer's quotes
   active?: boolean
   found?: (key: string) => boolean | undefined // undefined: not checked yet
   onCite?: (c: Citation) => void
+  onShowSelection?: (s: PdfSelection) => void
 }
 
-function MessageView({ message, streaming, hue, active, found, onCite }: Props) {
+function MessageView({ message, streaming, hue, active, found, onCite, onShowSelection }: Props) {
   const { markdown, citations } = useMemo(
     () => parseCitations(message.text, message.id, streaming),
     [message.text, message.id, streaming],
@@ -55,7 +56,19 @@ function MessageView({ message, streaming, hue, active, found, onCite }: Props) 
   if (message.role === 'user') {
     return (
       <div className="msg user">
-        <div className="bubble">{message.text}</div>
+        <div className="bubble">
+          {message.selection && (
+            <button
+              className="quoted"
+              onClick={() => onShowSelection?.(message.selection!)}
+              title="Show this passage in the PDF"
+            >
+              <span className="quoted-page">p.{message.selection.page}</span>
+              <span className="quoted-text">“{message.selection.text}”</span>
+            </button>
+          )}
+          {message.text}
+        </div>
       </div>
     )
   }

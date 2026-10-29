@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS messages (
     text        TEXT NOT NULL,
     tools       TEXT NOT NULL DEFAULT '[]',  -- JSON list of tool calls shown under the message
     error       TEXT,
+    selection   TEXT,                        -- JSON {page, ranges, text}: PDF passage the question is about
     created_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, id);
@@ -54,10 +55,18 @@ def connect():
         conn.close()
 
 
+# Columns added after the first release: (table, column, definition).
+MIGRATIONS = [("messages", "selection", "TEXT")]
+
+
 def init() -> None:
     config.ensure_dirs()
     with connect() as c:
         c.executescript(SCHEMA)
+        for table, column, definition in MIGRATIONS:
+            columns = {row["name"] for row in c.execute(f"PRAGMA table_info({table})")}
+            if column not in columns:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _session(row: sqlite3.Row) -> dict:
@@ -70,6 +79,7 @@ def _session(row: sqlite3.Row) -> dict:
 def _message(row: sqlite3.Row) -> dict:
     d = dict(row)
     d["tools"] = json.loads(d["tools"])
+    d["selection"] = json.loads(d["selection"]) if d["selection"] else None
     return d
 
 
@@ -162,13 +172,21 @@ def delete_highlight(session_id: str, highlight_id: int) -> bool:
 
 
 def add_message(
-    session_id: str, role: str, text: str, tools: list | None = None, error: str | None = None
+    session_id: str,
+    role: str,
+    text: str,
+    tools: list | None = None,
+    error: str | None = None,
+    selection: dict | None = None,
 ) -> dict:
     with connect() as c:
         cur = c.execute(
-            "INSERT INTO messages (session_id, role, text, tools, error, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (session_id, role, text, json.dumps(tools or []), error, time.time()),
+            "INSERT INTO messages (session_id, role, text, tools, error, selection, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                session_id, role, text, json.dumps(tools or []), error,
+                json.dumps(selection) if selection else None, time.time(),
+            ),
         )
         row = c.execute("SELECT * FROM messages WHERE id = ?", (cur.lastrowid,)).fetchone()
     update_session(session_id)

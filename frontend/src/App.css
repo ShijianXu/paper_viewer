@@ -274,3 +274,58 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
 .highlight-bar .swatch:hover:not(:disabled) { background: var(--uc); transform: scale(1.15); }
 .highlight-bar .swatch.current { box-shadow: 0 0 0 2px var(--fg); }
 .highlight-bar .delete { margin-left: 2px; font-size: 15px; }
+
+/* ---------------------------------------------------------------- asking about a passage */
+
+/* The passage being asked about, or a past one being shown: dashed outline. */
+.hl-ask { --uc: var(--accent); }
+.textLayer mark.user-mark.hl-ask {
+  background: color-mix(in srgb, var(--uc) 15%, transparent);
+  box-shadow: none;
+  outline: 1.5px dashed var(--uc);
+  outline-offset: 1px;
+  cursor: text;
+}
+.textLayer mark.user-mark.flash { animation: flash-ask 1.4s ease-out; }
+@keyframes flash-ask {
+  0%, 40% { background: color-mix(in srgb, var(--uc) 60%, transparent); }
+}
+
+.highlight-bar .ask { margin-left: 6px; padding: 3px 10px; font-size: 13px; white-space: nowrap; }
+
+.ask-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 6px 6px 10px;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  font-size: 13px;
+}
+.ask-chip-label { font-weight: 600; white-space: nowrap; color: var(--accent); }
+.ask-chip-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+
+.msg.user .quoted {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 2px 0 8px;
+  padding: 4px 8px;
+  border: none;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 13px;
+  color: var(--muted);
+  white-space: normal;
+}
+.msg.user .quoted:hover { background: var(--bg-sunken); color: var(--fg); }
+.quoted-page { font-weight: 600; color: var(--accent); margin-right: 6px; }
+.quoted-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

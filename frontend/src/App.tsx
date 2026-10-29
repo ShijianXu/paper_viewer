@@ -1,6 +1,6 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import { api, type HighlightColor, type Message, type Session, type ToolCall, type UserHighlight } from './api'
+import { api, type HighlightColor, type Message, type PdfSelection, type Session, type ToolCall, type UserHighlight } from './api'
 import {
   buildPageIndex,
   citeHue,
@@ -12,7 +12,7 @@ import {
   type PageIndex,
 } from './citations'
 import MessageView from './MessageView'
-import PdfPane, { type NewHighlight, type ShownHighlight } from './PdfPane'
+import PdfPane, { type AskMark, type ShownHighlight } from './PdfPane'
 import './App.css'
 
 type Draft = { text: string; tools: ToolCall[] }
@@ -38,6 +38,8 @@ export default function App() {
   const [pageIndexes, setPageIndexes] = useState<PageIndex[] | null>(null)
   const [activeMessageId, setActiveMessageId] = useState<number | null>(null)
   const [focus, setFocus] = useState<{ key: string; nonce: number } | null>(null)
+  const [askSelection, setAskSelection] = useState<PdfSelection | null>(null) // attached to the next question
+  const [shownSelection, setShownSelection] = useState<{ selection: PdfSelection; nonce: number } | null>(null)
   const currentIdRef = useRef(currentId)
   currentIdRef.current = currentId
   const createdHere = useRef<string | null>(null) // session just created by send/openPdf: keep its state
@@ -73,6 +75,8 @@ export default function App() {
     setPageIndexes(null)
     setFocus(null)
     setActiveMessageId(null)
+    setAskSelection(null)
+    setShownSelection(null)
   }, [])
 
   useEffect(() => {
@@ -131,12 +135,31 @@ export default function App() {
     if (!pageIndexes) return []
     return highlights.flatMap((h) => {
       const match = resolveHighlight(h, pageIndexes)
-      return match ? [{ id: h.id, color: h.color, match }] : []
+      return match ? [{ id: h.id, color: h.color, text: h.text, match }] : []
     })
   }, [highlights, pageIndexes])
 
+  // The passage marked with a dashed outline: one the user clicked in a sent
+  // question (shown for a few seconds), else the one attached to the next question.
+  const askMark = useMemo<AskMark | null>(() => {
+    const target = shownSelection?.selection ?? askSelection
+    const match = target && pageIndexes && resolveHighlight(target, pageIndexes)
+    return match ? { match, nonce: shownSelection?.nonce ?? 0, scroll: !!shownSelection } : null
+  }, [shownSelection, askSelection, pageIndexes])
+
+  useEffect(() => {
+    if (!shownSelection) return
+    const timer = setTimeout(() => setShownSelection(null), 3000)
+    return () => clearTimeout(timer)
+  }, [shownSelection])
+
+  const showSelection = useCallback(
+    (selection: PdfSelection) => setShownSelection({ selection, nonce: Date.now() }),
+    [],
+  )
+
   const createHighlight = useCallback(
-    (h: NewHighlight, color: HighlightColor) => {
+    (h: PdfSelection, color: HighlightColor) => {
       const sid = currentIdRef.current
       if (!sid) return
       api
@@ -182,16 +205,17 @@ export default function App() {
     return s.id
   }
 
-  async function send(text: string) {
+  async function send(text: string, selection: PdfSelection | null) {
     setError(null)
+    setAskSelection(null)
     let id: string | null = null
     try {
       id = await ensureSession()
       const sid = id
       const now = Date.now() / 1000
-      setMessages((m) => [...m, { id: -2, role: 'user', text, tools: [], error: null, created_at: now }])
+      setMessages((m) => [...m, { id: -2, role: 'user', text, tools: [], error: null, selection, created_at: now }])
       setDraft({ text: '', tools: [] })
-      await api.sendMessage(sid, text, (ev) => {
+      await api.sendMessage(sid, text, selection, (ev) => {
         if (currentIdRef.current !== sid) return
         if (ev.type === 'text') setDraft((d) => d && { ...d, text: d.text + ev.text })
         else if (ev.type === 'tool') setDraft((d) => d && { ...d, tools: [...d.tools, { name: ev.name, summary: ev.summary }] })
@@ -255,6 +279,9 @@ export default function App() {
       found={found}
       onCite={onCite}
       onSend={send}
+      askSelection={askSelection}
+      onClearAsk={() => setAskSelection(null)}
+      onShowSelection={showSelection}
       onStop={() => currentId && api.stop(currentId)}
       onOpenPdf={openPdf}
     />
@@ -327,6 +354,8 @@ export default function App() {
                   activeMessageId={activeMessageId}
                   focus={focus}
                   userHighlights={shownHighlights}
+                  askMark={askMark}
+                  onAsk={setAskSelection}
                   onDocument={setPdfDoc}
                   onCreateHighlight={createHighlight}
                   onRecolorHighlight={recolorHighlight}
@@ -387,13 +416,39 @@ type ChatProps = {
   activeMessageId: number | null
   found: (key: string) => boolean | undefined
   onCite: (c: Citation) => void
-  onSend: (text: string) => void
+  onSend: (text: string, selection: PdfSelection | null) => void
+  askSelection: PdfSelection | null
+  onClearAsk: () => void
+  onShowSelection: (s: PdfSelection) => void
   onStop: () => void
   onOpenPdf: (file: File) => void
 }
 
-function ChatPane({ session, messages, draft, hues, nextHue, busy, uploading, activeMessageId, found, onCite, onSend, onStop, onOpenPdf }: ChatProps) {
+function ChatPane({
+  session,
+  messages,
+  draft,
+  hues,
+  nextHue,
+  busy,
+  uploading,
+  activeMessageId,
+  found,
+  onCite,
+  onSend,
+  askSelection,
+  onClearAsk,
+  onShowSelection,
+  onStop,
+  onOpenPdf,
+}: ChatProps) {
   const [text, setText] = useState('')
+  const textarea = useRef<HTMLTextAreaElement>(null)
+
+  // A passage was attached: type the question right away.
+  useEffect(() => {
+    if (askSelection) textarea.current?.focus()
+  }, [askSelection])
   const [dragOver, setDragOver] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const list = useRef<HTMLDivElement>(null)
@@ -407,10 +462,10 @@ function ChatPane({ session, messages, draft, hues, nextHue, busy, uploading, ac
   }, [messages, draft])
 
   const submit = () => {
-    const t = text.trim()
+    const t = text.trim() || (askSelection ? 'Explain this passage.' : '')
     if (!t || busy) return
     stickToBottom.current = true
-    onSend(t)
+    onSend(t, askSelection)
     setText('')
   }
 
@@ -465,16 +520,40 @@ function ChatPane({ session, messages, draft, hues, nextHue, busy, uploading, ac
           </div>
         )}
         {messages.map((m) => (
-          <MessageView key={m.id} message={m} hue={hues.get(m.id)} active={m.id === activeMessageId} found={found} onCite={onCite} />
+          <MessageView
+            key={m.id}
+            message={m}
+            hue={hues.get(m.id)}
+            active={m.id === activeMessageId}
+            found={found}
+            onCite={onCite}
+            onShowSelection={onShowSelection}
+          />
         ))}
         {draft && <MessageView message={{ id: -1, role: 'assistant', error: null, ...draft }} hue={nextHue} streaming />}
         {!draft && session?.running && <div className="thinking">Claude is still answering…</div>}
       </div>
 
       <div className="composer">
+        {askSelection && (
+          <div className="ask-chip">
+            <span className="ask-chip-label">Asking about p.{askSelection.page}</span>
+            <span className="ask-chip-text">“{askSelection.text}”</span>
+            <button className="icon" onClick={onClearAsk} title="Remove the passage" aria-label="Remove the passage">
+              ×
+            </button>
+          </div>
+        )}
         <textarea
+          ref={textarea}
           value={text}
-          placeholder={session?.has_pdf ? 'Ask about the paper…' : 'Message Claude, or paste a link to a paper…'}
+          placeholder={
+            askSelection
+              ? 'Ask about this passage… (leave empty to have it explained)'
+              : session?.has_pdf
+                ? 'Ask about the paper… (or select text in the PDF and click Ask Claude)'
+                : 'Message Claude, or paste a link to a paper…'
+          }
           rows={3}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -510,7 +589,7 @@ function ChatPane({ session, messages, draft, hues, nextHue, busy, uploading, ac
               Stop
             </button>
           ) : (
-            <button className="primary" onClick={submit} disabled={!text.trim()}>
+            <button className="primary" onClick={submit} disabled={!text.trim() && !askSelection}>
               Send
             </button>
           )}

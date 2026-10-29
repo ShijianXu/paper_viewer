@@ -166,8 +166,17 @@ def delete_highlight(session_id: str, highlight_id: int) -> dict:
 # ---------------------------------------------------------------- chat
 
 
+class Selection(BaseModel):
+    """A passage of the PDF the question is about."""
+
+    page: int = Field(ge=1)
+    ranges: list[tuple[int, int, int]] = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=5_000)
+
+
 class NewMessage(BaseModel):
     text: str
+    selection: Selection | None = None
 
 
 @app.post("/api/sessions/{session_id}/messages")
@@ -176,12 +185,15 @@ async def send_message(session_id: str, body: NewMessage) -> StreamingResponse:
     text = body.text.strip()
     if not text:
         raise HTTPException(400, "Message is empty")
+    if body.selection and not session["has_pdf"]:
+        raise HTTPException(400, "This session has no paper")
     if claude_runner.is_running(session_id):
         raise HTTPException(409, "Claude is still answering the previous message")
     if session["title"] == "New session" and not session["has_pdf"]:
         db.update_session(session_id, title=text[:60])
 
-    run = claude_runner.start(session_id, text)
+    selection = body.selection.model_dump() if body.selection else None
+    run = claude_runner.start(session_id, text, selection)
 
     async def events():
         yield json.dumps({"type": "started"}) + "\n"

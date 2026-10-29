@@ -10,12 +10,20 @@ export type Session = {
 
 export type ToolCall = { name: string; summary: string }
 
+/** A passage of the PDF; ranges: [itemIndex, start, end] in the page's text items. */
+export type PdfSelection = {
+  page: number
+  ranges: [number, number, number][]
+  text: string
+}
+
 export type Message = {
   id: number
   role: 'user' | 'assistant'
   text: string
   tools: ToolCall[]
   error: string | null
+  selection: PdfSelection | null // the passage a question is about
   created_at: number
 }
 
@@ -23,13 +31,7 @@ export const HIGHLIGHT_COLORS = ['yellow', 'green', 'blue', 'pink', 'orange', 'p
 export type HighlightColor = (typeof HIGHLIGHT_COLORS)[number]
 
 /** A passage the user highlighted. ranges: [itemIndex, start, end] in the page's text items. */
-export type UserHighlight = {
-  id: number
-  page: number
-  ranges: [number, number, number][]
-  text: string
-  color: HighlightColor
-}
+export type UserHighlight = PdfSelection & { id: number; color: HighlightColor }
 
 export type StreamEvent =
   | { type: 'started' }
@@ -81,8 +83,8 @@ export const api = {
   },
 
   /** Send a message and call onEvent for each streamed event until the answer is done. */
-  async sendMessage(id: string, text: string, onEvent: (e: StreamEvent) => void) {
-    const res = await fetch(`/api/sessions/${id}/messages`, json('POST', { text }))
+  async sendMessage(id: string, text: string, selection: PdfSelection | null, onEvent: (e: StreamEvent) => void) {
+    const res = await fetch(`/api/sessions/${id}/messages`, json('POST', { text, selection }))
     if (!res.ok || !res.body) {
       let detail = res.statusText
       try {
