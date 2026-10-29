@@ -40,6 +40,16 @@ CREATE TABLE IF NOT EXISTS highlights (       -- made by the user with the mouse
     created_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS highlights_session ON highlights(session_id, id);
+CREATE TABLE IF NOT EXISTS materials (        -- extra files for Claude, stored in <session>/materials/
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    filename    TEXT NOT NULL,                -- name in the materials folder
+    size        INTEGER NOT NULL,
+    announced   INTEGER NOT NULL DEFAULT 0,   -- Claude has been told about it
+    removed     INTEGER NOT NULL DEFAULT 0,   -- removed by the user; Claude still has to be told
+    created_at  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS materials_session ON materials(session_id, id);
 """
 
 
@@ -169,6 +179,57 @@ def delete_highlight(session_id: str, highlight_id: int) -> bool:
             "DELETE FROM highlights WHERE id = ? AND session_id = ?", (highlight_id, session_id)
         )
     return cur.rowcount > 0
+
+
+def list_materials(session_id: str, include_removed: bool = False) -> list[dict]:
+    query = "SELECT * FROM materials WHERE session_id = ?" + ("" if include_removed else " AND removed = 0")
+    with connect() as c:
+        rows = c.execute(query + " ORDER BY id", (session_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def add_material(session_id: str, filename: str, size: int) -> dict:
+    with connect() as c:
+        cur = c.execute(
+            "INSERT INTO materials (session_id, filename, size, created_at) VALUES (?, ?, ?, ?)",
+            (session_id, filename, size, time.time()),
+        )
+        row = c.execute("SELECT * FROM materials WHERE id = ?", (cur.lastrowid,)).fetchone()
+    update_session(session_id)
+    return dict(row)
+
+
+def remove_material(session_id: str, material_id: int) -> dict | None:
+    """Mark a material removed (Claude is told on the next turn); returns it, or None."""
+    with connect() as c:
+        row = c.execute(
+            "SELECT * FROM materials WHERE id = ? AND session_id = ? AND removed = 0",
+            (material_id, session_id),
+        ).fetchone()
+        if not row:
+            return None
+        if row["announced"]:
+            c.execute("UPDATE materials SET removed = 1 WHERE id = ?", (material_id,))
+        else:  # Claude never heard of it: just forget it
+            c.execute("DELETE FROM materials WHERE id = ?", (material_id,))
+    return dict(row)
+
+
+def materials_announced(session_id: str, ids: list[int]) -> None:
+    """After a turn told Claude about these materials: mark added ones known, drop removed ones."""
+    with connect() as c:
+        for mid in ids:
+            c.execute(
+                "DELETE FROM materials WHERE id = ? AND session_id = ? AND removed = 1", (mid, session_id)
+            )
+            c.execute("UPDATE materials SET announced = 1 WHERE id = ? AND session_id = ?", (mid, session_id))
+
+
+def reset_materials_announced(session_id: str) -> None:
+    """A new Claude conversation knows none of the materials."""
+    with connect() as c:
+        c.execute("DELETE FROM materials WHERE session_id = ? AND removed = 1", (session_id,))
+        c.execute("UPDATE materials SET announced = 0 WHERE session_id = ?", (session_id,))
 
 
 def add_message(

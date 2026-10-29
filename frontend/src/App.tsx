@@ -1,6 +1,6 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import { api, type HighlightColor, type Message, type PdfSelection, type Session, type ToolCall, type UserHighlight } from './api'
+import { api, type HighlightColor, type Material, type Message, type PdfSelection, type Session, type ToolCall, type UserHighlight } from './api'
 import {
   buildPageIndex,
   citeHue,
@@ -29,6 +29,8 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [highlights, setHighlights] = useState<UserHighlight[]>([])
+  const [materials, setMaterials] = useState<Material[]>([])
+  const [addingMaterials, setAddingMaterials] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -52,6 +54,7 @@ export default function App() {
     setSession(data.session)
     setMessages(data.messages)
     setHighlights(data.highlights)
+    setMaterials(data.materials)
     const lastAnswer = [...data.messages].reverse().find((m) => m.role === 'assistant')
     setActiveMessageId(lastAnswer?.id ?? null)
   }, [])
@@ -70,6 +73,7 @@ export default function App() {
     setSession(null)
     setMessages([])
     setHighlights([])
+    setMaterials([])
     setDraft(null)
     setPdfDoc(null)
     setPageIndexes(null)
@@ -235,6 +239,35 @@ export default function App() {
     }
   }
 
+  async function addMaterials(files: File[]) {
+    if (!files.length) return
+    setError(null)
+    setAddingMaterials(true)
+    try {
+      const id = await ensureSession()
+      const added = await api.addMaterials(id, files)
+      if (currentIdRef.current === id) setMaterials((all) => [...all, ...added])
+    } catch (e) {
+      setError(`Could not add the materials: ${e instanceof Error ? e.message : String(e)}`)
+      // Files before the failing one may have been saved: show what is there.
+      const id = currentIdRef.current
+      if (id) api.getSession(id).then((d) => currentIdRef.current === id && setMaterials(d.materials)).catch(() => {})
+    } finally {
+      setAddingMaterials(false)
+    }
+  }
+
+  async function removeMaterial(m: Material) {
+    const id = currentIdRef.current
+    if (!id) return
+    try {
+      await api.deleteMaterial(id, m.id)
+      if (currentIdRef.current === id) setMaterials((all) => all.filter((x) => x.id !== m.id))
+    } catch (e) {
+      setError(`Could not remove ${m.filename}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   async function openPdf(file: File) {
     setError(null)
     setUploading(true)
@@ -284,6 +317,10 @@ export default function App() {
       onShowSelection={showSelection}
       onStop={() => currentId && api.stop(currentId)}
       onOpenPdf={openPdf}
+      materials={materials}
+      addingMaterials={addingMaterials}
+      onAddMaterials={addMaterials}
+      onRemoveMaterial={removeMaterial}
     />
   )
 
@@ -422,6 +459,10 @@ type ChatProps = {
   onShowSelection: (s: PdfSelection) => void
   onStop: () => void
   onOpenPdf: (file: File) => void
+  materials: Material[]
+  addingMaterials: boolean
+  onAddMaterials: (files: File[]) => void
+  onRemoveMaterial: (m: Material) => void
 }
 
 function ChatPane({
@@ -441,7 +482,13 @@ function ChatPane({
   onShowSelection,
   onStop,
   onOpenPdf,
+  materials,
+  addingMaterials,
+  onAddMaterials,
+  onRemoveMaterial,
 }: ChatProps) {
+  const materialInput = useRef<HTMLInputElement>(null)
+  const [showMaterials, setShowMaterials] = useState(false)
   const [text, setText] = useState('')
   const textarea = useRef<HTMLTextAreaElement>(null)
 
@@ -472,8 +519,12 @@ function ChatPane({
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setDragOver(false)
-    const file = e.dataTransfer.files[0]
-    if (file && canOpenPdf) onOpenPdf(file)
+    const files = [...e.dataTransfer.files]
+    if (!files.length) return
+    // A single PDF in a session without a paper becomes the paper; anything else is extra material.
+    const isPdf = files[0].type === 'application/pdf' || files[0].name.toLowerCase().endsWith('.pdf')
+    if (canOpenPdf && files.length === 1 && isPdf) onOpenPdf(files[0])
+    else onAddMaterials(files)
   }
 
   const empty = messages.length === 0 && !draft
@@ -482,7 +533,6 @@ function ChatPane({
     <div
       className={`chat${dragOver ? ' drag-over' : ''}`}
       onDragOver={(e) => {
-        if (!canOpenPdf) return
         e.preventDefault()
         setDragOver(true)
       }}
@@ -491,6 +541,36 @@ function ChatPane({
     >
       <header className="chat-head">
         <h1 title={session?.title}>{session?.title ?? 'New session'}</h1>
+        {materials.length > 0 && (
+          <div className="materials">
+            <button
+              className="materials-toggle"
+              onClick={() => setShowMaterials((v) => !v)}
+              aria-expanded={showMaterials}
+              title="Extra files Claude can read"
+            >
+              📎 {materials.length} material{materials.length > 1 ? 's' : ''}
+            </button>
+            {showMaterials && (
+              <div className="materials-list">
+                <p className="muted small">Extra files for Claude. They are not shown here; Claude reads them.</p>
+                <ul>
+                  {materials.map((m) => (
+                    <li key={m.id}>
+                      <span className="material-name" title={m.filename}>
+                        {m.filename}
+                      </span>
+                      <span className="muted small">{formatSize(m.size)}</span>
+                      <button className="icon" onClick={() => onRemoveMaterial(m)} title="Remove" aria-label={`Remove ${m.filename}`}>
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
       </header>
 
       <div
@@ -507,7 +587,8 @@ function ChatPane({
             {canOpenPdf && (
               <p className="muted">
                 Open a PDF (or drop it here), or paste a link to a paper (arXiv, OpenReview, ACL Anthology, a DOI, …), then tell
-                Claude what to look for. You can also just chat.
+                Claude what to look for. You can also just chat. With 📎 Materials you can give Claude extra files (other papers,
+                notes, images…) to draw on.
               </p>
             )}
             <div className="examples">
@@ -582,6 +663,23 @@ function ChatPane({
               />
             </>
           )}
+          <button
+            onClick={() => materialInput.current?.click()}
+            disabled={addingMaterials}
+            title="Add extra files (other papers, notes, images, data…) for Claude to read"
+          >
+            {addingMaterials ? 'Adding…' : '📎 Materials'}
+          </button>
+          <input
+            ref={materialInput}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              onAddMaterials([...(e.target.files ?? [])])
+              e.target.value = ''
+            }}
+          />
           <span className="spacer" />
           <span className="muted small">Enter to send · Shift+Enter for a new line</span>
           {busy ? (
@@ -597,4 +695,10 @@ function ChatPane({
       </div>
     </div>
   )
+}
+
+function formatSize(n: number) {
+  if (n < 1024) return `${n} B`
+  if (n < 1 << 20) return `${Math.round(n / 1024)} KB`
+  return `${(n / (1 << 20)).toFixed(1)} MB`
 }

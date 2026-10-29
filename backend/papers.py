@@ -122,6 +122,49 @@ def store_pdf(session_id: str, source: Path, filename: str) -> dict:
     return db.get_session(session_id)
 
 
+# ---------------------------------------------------------------- additional materials
+
+
+def _material_name(folder: Path, filename: str) -> str:
+    """A safe, unused file name in `folder`, close to the original."""
+    name = Path(filename).name.strip() or "file"
+    name = re.sub(r"[^\w.\-+() ]", "_", name)[:150].lstrip(".") or "file"
+    stem, suffix = Path(name).stem, Path(name).suffix
+    candidate, n = name, 2
+    while (folder / candidate).exists():
+        candidate = f"{stem} ({n}){suffix}"
+        n += 1
+    return candidate
+
+
+def store_material(session_id: str, upload, filename: str) -> dict:
+    """Save an uploaded file into the session's materials folder (read-only for Claude)."""
+    folder = config.session_dir(session_id) / config.MATERIALS_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    name = _material_name(folder, filename)
+    dest = folder / name
+    size = 0
+    try:
+        with dest.open("wb") as out:
+            while chunk := upload.read(1 << 20):
+                size += len(chunk)
+                if size > config.MAX_MATERIAL_BYTES:
+                    raise ValueError(f"{filename} is larger than {config.MAX_MATERIAL_BYTES >> 20} MB")
+                out.write(chunk)
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
+    os.chmod(dest, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+    return db.add_material(session_id, name, size)
+
+
+def delete_material_file(session_id: str, filename: str) -> None:
+    path = config.session_dir(session_id) / config.MATERIALS_DIR / filename
+    if path.is_file():
+        path.chmod(0o600)
+        path.unlink()
+
+
 # ---------------------------------------------------------------- links
 
 URL_RE = re.compile(r"https?://[^\s<>\"'`]+")

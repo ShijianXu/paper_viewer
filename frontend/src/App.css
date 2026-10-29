@@ -329,3 +329,26 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* ---------------------------------------------------------------- additional materials */
+
+.chat-head { display: flex; align-items: center; gap: 12px; }
+.chat-head h1 { flex: 1; min-width: 0; }
+.materials { position: relative; flex: none; }
+.materials-toggle { font-size: 13px; padding: 3px 10px; }
+.materials-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  width: min(380px, 80vw);
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+.materials-list p { margin: 0 0 6px; }
+.materials-list ul { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+.materials-list li { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 14px; }
+.material-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

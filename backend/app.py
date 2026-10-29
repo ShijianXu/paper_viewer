@@ -51,6 +51,7 @@ def get_session(session_id: str) -> dict:
         "session": session | {"running": claude_runner.is_running(session_id)},
         "messages": db.list_messages(session_id),
         "highlights": db.list_highlights(session_id),
+        "materials": db.list_materials(session_id),
     }
 
 
@@ -113,6 +114,32 @@ def get_pdf(session_id: str) -> FileResponse:
         raise HTTPException(404, "No paper in this session")
     # Serve the backup: it is the file the user opened, whatever Claude did in its folder.
     return FileResponse(config.original_pdf(session_id), media_type="application/pdf")
+
+
+# ---------------------------------------------------------------- additional materials
+
+
+@app.post("/api/sessions/{session_id}/materials")
+def add_materials(session_id: str, files: list[UploadFile]) -> list[dict]:
+    """Add files for Claude to read. Any type; stored as-is, not shown in the app."""
+    _require(session_id)
+    added = []
+    for f in files:
+        try:
+            added.append(papers.store_material(session_id, f.file, f.filename or "file"))
+        except ValueError as e:
+            raise HTTPException(413, str(e)) from e
+    return added
+
+
+@app.delete("/api/sessions/{session_id}/materials/{material_id}")
+def remove_material(session_id: str, material_id: int) -> dict:
+    _require(session_id)
+    material = db.remove_material(session_id, material_id)
+    if not material:
+        raise HTTPException(404, "Material not found")
+    papers.delete_material_file(session_id, material["filename"])
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------- user highlights

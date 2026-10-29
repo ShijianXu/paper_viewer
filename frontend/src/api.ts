@@ -33,6 +33,9 @@ export type HighlightColor = (typeof HIGHLIGHT_COLORS)[number]
 /** A passage the user highlighted. ranges: [itemIndex, start, end] in the page's text items. */
 export type UserHighlight = PdfSelection & { id: number; color: HighlightColor }
 
+/** An extra file for Claude to read; not shown in the app. */
+export type Material = { id: number; filename: string; size: number; created_at: number }
+
 export type StreamEvent =
   | { type: 'started' }
   | { type: 'text'; text: string }
@@ -64,7 +67,9 @@ export const api = {
   listSessions: () => request<Session[]>('/sessions'),
   createSession: () => request<Session>('/sessions', { method: 'POST' }),
   getSession: (id: string) =>
-    request<{ session: Session; messages: Message[]; highlights: UserHighlight[] }>(`/sessions/${id}`),
+    request<{ session: Session; messages: Message[]; highlights: UserHighlight[]; materials: Material[] }>(
+      `/sessions/${id}`,
+    ),
   addHighlight: (id: string, h: Omit<UserHighlight, 'id'>) =>
     request<UserHighlight>(`/sessions/${id}/highlights`, json('POST', h)),
   recolorHighlight: (id: string, highlightId: number, color: HighlightColor) =>
@@ -75,6 +80,14 @@ export const api = {
   deleteSession: (id: string) => request<{ ok: boolean }>(`/sessions/${id}`, { method: 'DELETE' }),
   stop: (id: string) => request<{ stopped: boolean }>(`/sessions/${id}/stop`, { method: 'POST' }),
   pdfUrl: (id: string) => `/api/sessions/${id}/pdf`,
+
+  addMaterials(id: string, files: File[]) {
+    const form = new FormData()
+    for (const f of files) form.append('files', f)
+    return request<Material[]>(`/sessions/${id}/materials`, { method: 'POST', body: form })
+  },
+  deleteMaterial: (id: string, materialId: number) =>
+    request<{ ok: boolean }>(`/sessions/${id}/materials/${materialId}`, { method: 'DELETE' }),
 
   uploadPdf(id: string, file: File) {
     const form = new FormData()

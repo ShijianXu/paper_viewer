@@ -30,8 +30,12 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    if os.path.relpath(target, root) in PROTECTED:
+    rel = os.path.relpath(target, root)
+    if rel in PROTECTED:
         print("Blocked: paper.pdf is the user's paper and must not be modified.", file=sys.stderr)
+        return 2
+    if rel.split(os.sep)[0] == "materials":
+        print("Blocked: materials/ holds the user's files and must not be modified.", file=sys.stderr)
         return 2
     return 0
 

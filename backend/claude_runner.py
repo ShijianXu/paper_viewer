@@ -34,6 +34,9 @@ Whenever a statement in your answer is supported by a specific passage of the pa
 - The app shows the tag's content inline as a clickable quotation (it adds the quotation marks and the page number) and highlights it in the PDF. So the sentence must read naturally with the quote in place, e.g.: The authors propose <cite page="1">a new simple network architecture, the Transformer</cite>, which removes recurrence entirely.
 - Cite generously when you discuss the paper's content, but never invent a quote. Never put cite tags inside code blocks or headings.
 
+## Additional materials
+The user may add supplementary files (other papers, notes, images, data, ...) in ./materials/. You are told when files are added or removed. Use them as complementary information. Cite tags are only for paper.pdf: when you use a material, name the file instead (e.g. "according to materials/notes.txt, ..."). The files are read-only.
+
 ## Formatting
 Answer in Markdown. Use $...$ for inline math and $$...$$ for display math.
 
@@ -47,6 +50,10 @@ TOOL_PATTERNS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 ALLOWED_TOOLS = [
     "Read", "Glob", "Grep", "LS", "WebSearch", "WebFetch", "Skill", "TodoWrite", "Task",
     *TOOL_PATTERNS,  # limited to the session folder by the hook
+    # Every shell command runs in the sandbox (no escape: allowUnsandboxedCommands
+    # is off), so all of them may run. Without this, commands the sandbox doesn't
+    # auto-approve, e.g. ones with $(...), would be refused in dontAsk mode.
+    "Bash",
 ]
 
 DENIED_COMMANDS = ["sudo", "su", "kill", "pkill", "killall", "systemctl", "shutdown", "reboot", "crontab"]
@@ -80,6 +87,29 @@ def _announce_pdf(session: dict) -> str:
         f'[The user opened the paper "{session["pdf_filename"]}". It is saved as ./paper.pdf '
         "in your working directory. Read it before answering.]\n\n"
     )
+
+
+def _size(n: int) -> str:
+    return f"{n} B" if n < 1024 else f"{n / 1024:.0f} KB" if n < 1 << 20 else f"{n / (1 << 20):.1f} MB"
+
+
+def _announce_materials(session_id: str) -> tuple[str, list[int]]:
+    """A note about materials added or removed since Claude last heard, and their ids."""
+    materials = db.list_materials(session_id, include_removed=True)
+    new = [m for m in materials if not m["announced"] and not m["removed"]]
+    gone = [m for m in materials if m["removed"]]
+    note = ""
+    if new:
+        files = "\n".join(f"- ./materials/{m['filename']} ({_size(m['size'])})" for m in new)
+        note += (
+            "[The user added supplementary materials to this session:\n"
+            f"{files}\n"
+            "Read them now, so you can draw on them for this and later questions.]\n\n"
+        )
+    if gone:
+        names = ", ".join(m["filename"] for m in gone)
+        note += f"[The user removed these materials; don't use them any more: {names}]\n\n"
+    return note, [m["id"] for m in new + gone]
 
 
 def _with_selection(text: str, selection: dict | None) -> str:
@@ -157,6 +187,8 @@ async def _turn(run: Run, user_text: str, selection: dict | None) -> None:
             if run.stopped:
                 return
         prefix = notes + ("" if session["pdf_announced"] or not session["has_pdf"] else _announce_pdf(session))
+        materials_note, material_ids = _announce_materials(sid)
+        prefix += materials_note
 
         if session["claude_session_id"]:
             ok, error = await _invoke(run, prefix + question, state, resume=session["claude_session_id"])
@@ -164,11 +196,14 @@ async def _turn(run: Run, user_text: str, selection: dict | None) -> None:
                 # Claude's own history is gone: start over with our saved transcript.
                 error = None
                 history = db.list_messages(sid)[:-1]
+                db.reset_materials_announced(sid)
+                materials_note, material_ids = _announce_materials(sid)
                 prompt = (
                     "[This continues an earlier conversation whose history was lost. "
                     "Here is the saved transcript:]\n\n"
                     f"{_transcript(history)}\n\n[End of transcript. The user's new message follows.]\n\n"
                     + (_announce_pdf(session) if session["has_pdf"] else "")
+                    + materials_note
                     + question
                 )
                 ok, error = await _invoke(run, prompt, state, new_id=str(uuid.uuid4()))
@@ -177,6 +212,8 @@ async def _turn(run: Run, user_text: str, selection: dict | None) -> None:
 
         if ok and session["has_pdf"]:
             db.update_session(sid, pdf_announced=1)
+        if ok:
+            db.materials_announced(sid, material_ids)
     except Exception as e:  # keep the run alive enough to report and save
         log.exception("turn failed")
         error = f"{type(e).__name__}: {e}"
@@ -247,6 +284,7 @@ async def _invoke(run: Run, prompt: str, state: dict, *, resume: str | None = No
     else:
         cmd += ["--session-id", new_id]
         db.update_session(run.session_id, claude_session_id=new_id, pdf_announced=0)
+        db.reset_materials_announced(run.session_id)
 
     run.proc = proc = await asyncio.create_subprocess_exec(
         *cmd,

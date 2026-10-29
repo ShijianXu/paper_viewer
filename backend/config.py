@@ -20,6 +20,8 @@ FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 HOOK_SCRIPT = Path(__file__).resolve().parent / "hooks" / "check_paths.py"
 
 PDF_NAME = "paper.pdf"
+MATERIALS_DIR = "materials"  # extra files for Claude, inside the session folder
+MAX_MATERIAL_BYTES = int(os.environ.get("PAPER_VIEWER_MAX_MATERIAL_MB", "50")) * 1024 * 1024
 
 
 def ensure_dirs() -> None:

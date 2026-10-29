@@ -38,6 +38,7 @@ All optional, set as environment variables:
 | `PAPER_VIEWER_HOST` | `127.0.0.1` | Address to listen on (keep it local) |
 | `PAPER_VIEWER_MODEL` | CLI default | Model for Claude, e.g. `opus`, `sonnet`, `haiku` |
 | `PAPER_VIEWER_CLAUDE` | `claude` on `PATH` | Path to the Claude CLI |
+| `PAPER_VIEWER_MAX_MATERIAL_MB` | `50` | Size limit for each additional material |
 
 Example: `PAPER_VIEWER_MODEL=sonnet uv run python -m backend`
 
@@ -130,7 +131,16 @@ You can highlight the PDF yourself:
 - Claude receives the passage with its page number, followed by your question.
 - The sent question shows the passage above your text. Click it to scroll the PDF to the passage, which is outlined for a few seconds.
 
-### 8. Saved sessions
+### 8. Additional materials
+
+Besides the paper, you can give Claude extra files to draw on: other papers, your notes, images, data, anything.
+
+- Click **📎 Materials** (next to the chat box) and pick one or more files, at any time in a session. Dropping files onto the chat works too; only a single PDF dropped into a session *without* a paper becomes the paper.
+- Materials are not displayed. The chat header shows "📎 N materials"; click it to see the list and remove files (×).
+- With your next message, Claude is told which files were added (and removed) and asked to read the new ones, so it can use them for that question and later ones. It names the file when it uses one; the clickable quotes and highlights stay reserved for the paper.
+- Each file can be up to 50 MB (configurable). Files are stored read-only in the session's `materials/` folder; Claude can read them (text, PDFs, images, and anything its shell tools can open) but not change them.
+
+### 9. Saved sessions
 
 Every session is saved automatically: the paper, all messages and the tools used.
 
@@ -205,6 +215,8 @@ frontend/src/
 | `POST /api/sessions/{id}/highlights` | Save a user highlight (`page`, `ranges`, `text`, `color`) |
 | `PATCH /api/sessions/{id}/highlights/{hid}` | Change its colour (`{"color": ...}`) |
 | `DELETE /api/sessions/{id}/highlights/{hid}` | Remove it |
+| `POST /api/sessions/{id}/materials` | Add materials (multipart, one or more `files`) |
+| `DELETE /api/sessions/{id}/materials/{mid}` | Remove a material |
 
 ### Talking to the Claude CLI
 
@@ -254,7 +266,7 @@ Inside the session folder Claude is free to work: extract text, pull out figures
 | Allowed | Blocked |
 |---|---|
 | Any shell command, e.g. `pdftotext`, `pdfimages`, `python`, `grep` | Writing, moving or deleting anything outside the session folder |
-| Creating files in the session folder (`Bash`, `Write`, `Edit`) | Changing `paper.pdf` |
+| Creating files in the session folder (`Bash`, `Write`, `Edit`) | Changing `paper.pdf` or the files in `materials/` |
 | Reading files (`Read`, `Glob`, `Grep`) | `sudo`, `su`, `kill`, `pkill`, `killall`, `systemctl`, `shutdown`, `reboot`, `crontab` |
 | `WebSearch`, `WebFetch`, `Skill`, `TodoWrite`, subagents (`Task`) | Network access from shell commands (use `WebSearch` / `WebFetch`) |
 | | MCP tools (not on the allow list) |
@@ -264,8 +276,8 @@ Inside the session folder Claude is free to work: extract text, pull out figures
 The settings are generated for each run by `claude_settings()` in `backend/claude_runner.py` and passed with `--settings`:
 
 1. **OS sandbox for shell commands.** `sandbox.enabled` turns on Claude Code's Bash sandbox (bubblewrap on Linux). Commands can write only to the working directory and to Claude's own temporary folder (`/tmp/claude-<uid>`), and have no network. `allowUnsandboxedCommands: false` stops Claude from retrying a command outside the sandbox.
-2. **A hook for file tools.** `Write`, `Edit`, `MultiEdit` and `NotebookEdit` don't go through the sandbox, so a `PreToolUse` hook (`backend/hooks/check_paths.py`) resolves the target path (following `..` and symlinks) and refuses anything outside the session folder, and `paper.pdf` itself.
-3. **Allow and deny lists.** `--permission-mode dontAsk` refuses every tool that isn't explicitly allowed, without prompting. The allow list holds the tools in the table; the deny list holds the system commands above.
+2. **A hook for file tools.** `Write`, `Edit`, `MultiEdit` and `NotebookEdit` don't go through the sandbox, so a `PreToolUse` hook (`backend/hooks/check_paths.py`) resolves the target path (following `..` and symlinks) and refuses anything outside the session folder, `paper.pdf` itself, and the `materials/` folder.
+3. **Allow and deny lists.** `--permission-mode dontAsk` refuses every tool that isn't explicitly allowed, without prompting. The allow list holds the tools in the table, including `Bash`: every shell command runs in the sandbox anyway, and without this, commands the sandbox doesn't approve on its own (e.g. ones with `$(...)`) would be refused. The deny list holds the system commands above, and takes priority.
 4. **Protecting the paper.** `paper.pdf` is read-only. After every run the backend compares its SHA-256 with the original and restores it from the backup in `originals/` if it changed. The browser is always served the backup.
 
 When a call is refused, Claude sees why and can try another way.
@@ -274,12 +286,13 @@ When a call is refused, Claude sees why and can try another way.
 
 ```
 ~/.paper_viewer/
-├── paper_viewer.db          # SQLite: sessions, messages, highlights
+├── paper_viewer.db          # SQLite: sessions, messages, highlights, materials
 ├── originals/
 │   └── <session-id>.pdf     # untouched copy of the paper (outside the sandbox)
 └── papers/
     └── <session-id>/        # Claude's working directory; the only place it can write
         ├── paper.pdf        # the paper (read-only)
+        ├── materials/       # additional materials the user added (read-only)
         └── ...              # anything Claude creates: extracted text, figures, scripts
 ```
 
@@ -287,6 +300,7 @@ When a call is refused, Claude sees why and can try another way.
 - `sessions`: id, title, original file name, SHA-256 of the PDF, Claude session id, whether Claude has been told about the PDF, times.
 - `messages`: id, session id, role, text, tools used, error (e.g. "Stopped by user."), the PDF passage a question is about (page, ranges, text), time. Quotes are part of the message text and are found in the PDF again when a session is opened.
 - `highlights`: id, session id, page, ranges (`[itemIndex, start, end]` in the page's text items), selected text, colour, time.
+- `materials`: id, session id, file name, size, whether Claude has been told about it, whether it was removed (until Claude is told), time.
 - Claude's own conversation history is kept by the CLI under `~/.claude/projects/`.
 - Deleting a session removes its rows, its folder and its backup PDF.
 
