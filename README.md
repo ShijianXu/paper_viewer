@@ -4,6 +4,18 @@ A local web app for reading research papers together with Claude. You open a PDF
 
 The app is a thin front end over the **Claude Code CLI (`claude`) installed on your machine**. It does not call the Anthropic API directly; it uses whatever login, model, settings and skills your local `claude` already has.
 
+![Reading "Attention Is All You Need": the paper on the left, the chat on the right. Each answer's quotes are highlighted in the paper in that answer's colour; clicking a quote jumps to it.](docs/screenshots/reading.png)
+
+*The paper on the left, the conversation on the right. Claude's quotes are clickable and highlighted in the PDF, one colour per answer.*
+
+![Asking about a selected passage: the passage is outlined in the PDF and quoted above the question; the answer quotes the paper again.](docs/screenshots/ask-about-passage.png)
+
+*Select a passage in the PDF and ask Claude about it. Your own highlights (blue, left) are saved with the session.*
+
+![A blog post (Lil'Log, "LLM Powered Autonomous Agents") saved as a PDF that looks like the website, read like a paper with highlighted quotes.](docs/screenshots/blog.png)
+
+*Paste a link to a blog post or article: it is saved as a PDF that looks like the website, and read like a paper.*
+
 ## Quick start
 
 ```bash
