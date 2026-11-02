@@ -242,11 +242,11 @@ async def _download_linked_paper(run: Run, session: dict, text: str, state: dict
     """
     failures = []
     for url in papers.find_urls(text)[:MAX_LINKS]:
-        tool = {"name": "Download", "summary": url}
+        tool = {"name": "Download", "summary": url}  # "Download" also covers saving a web page
         state["tools"].append(tool)
         await run.queue.put({"type": "tool", **tool})
         try:
-            session = await papers.fetch_into_session(session["id"], url)
+            session, webpage_url = await papers.fetch_into_session(session["id"], url)
         except Exception as e:
             reason = str(e) if isinstance(e, papers.DownloadError) else f"{type(e).__name__}: {e}"
             log.info("download from %s failed: %s", url, reason)
@@ -255,6 +255,12 @@ async def _download_linked_paper(run: Run, session: dict, text: str, state: dict
             continue
         tool["summary"] = f"{url} → {session['pdf_filename']}"
         await run.queue.put({"type": "pdf"})
+        if webpage_url:
+            tool["summary"] += " (web page saved as PDF)"
+            return session, (
+                f"[paper.pdf is the web page {webpage_url} (e.g. a blog post or article), saved as a PDF "
+                "that looks like the site. Treat it like a paper: read it and quote it with cite tags.]\n\n"
+            )
         return session, ""
     if not failures:
         return session, ""

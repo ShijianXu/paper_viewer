@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, unquote, urljoin, urlparse
 import httpx
 from pypdf import PdfReader
 
-from . import config, db
+from . import config, db, webpage
 
 log = logging.getLogger(__name__)
 
@@ -263,11 +263,13 @@ async def _get(client: httpx.AsyncClient, url: str, dest: Path) -> tuple[str, ht
     raise DownloadError(f"{url} is not a PDF")
 
 
-async def download_paper(url: str, dest: Path) -> tuple[str, str]:
-    """Download the paper behind `url` into `dest`. Returns (pdf_url, filename).
+async def download_paper(url: str, dest: Path) -> tuple[str, str, bool]:
+    """Get the paper behind `url` into `dest`. Returns (source url, filename, is_webpage).
 
     Tries the site's known PDF link first; otherwise fetches the page and, if it
     is HTML, follows its `citation_pdf_url` meta tag (used by most publishers).
+    A web page with no PDF behind it (a blog post, an article) is saved as a
+    PDF that looks like the page.
     """
     async with httpx.AsyncClient(
         follow_redirects=True, timeout=httpx.Timeout(60, connect=15), headers={"User-Agent": USER_AGENT}
@@ -284,7 +286,7 @@ async def download_paper(url: str, dest: Path) -> tuple[str, str]:
                     continue  # the guessed link failed; try the page itself
                 raise guess_error or e
             if kind == "pdf":
-                return str(resp.url), _filename(str(resp.url), resp)
+                return str(resp.url), _filename(str(resp.url), resp), False
             for rx in META_PDF_RES:
                 m = rx.search(page)
                 if m:
@@ -294,14 +296,24 @@ async def download_paper(url: str, dest: Path) -> tuple[str, str]:
                     except httpx.HTTPError as e:
                         raise DownloadError(f"could not fetch {pdf_url}: {type(e).__name__}") from e
                     if kind == "pdf":
-                        return str(resp.url), _filename(pdf_url, resp)
+                        return str(resp.url), _filename(pdf_url, resp), False
                     raise DownloadError(f"{pdf_url} did not return a PDF (the site may require a login)")
+            if candidate == url:
+                # A plain web page: save it as it looks.
+                try:
+                    final_url, _, filename = await webpage.capture(str(resp.url), dest)
+                except webpage.CaptureError as e:
+                    raise DownloadError(str(e)) from e
+                return final_url, filename, True
         raise guess_error or DownloadError(f"no PDF found at {url}")
 
 
-async def fetch_into_session(session_id: str, url: str) -> dict:
-    """Download the paper at `url` and make it the session's paper. Returns the session."""
+async def fetch_into_session(session_id: str, url: str) -> tuple[dict, str | None]:
+    """Get the paper at `url` and make it the session's paper.
+
+    Returns the session, and the page's address if it was a web page saved as PDF.
+    """
     with tempfile.TemporaryDirectory(dir=config.DATA_DIR) as tmp:
         dest = Path(tmp) / "download.pdf"
-        _, filename = await download_paper(url, dest)
-        return store_pdf(session_id, dest, filename)
+        source, filename, is_webpage = await download_paper(url, dest)
+        return store_pdf(session_id, dest, filename), (source if is_webpage else None)

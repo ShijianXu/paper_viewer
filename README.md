@@ -25,6 +25,7 @@ Tested on Linux (Ubuntu) with Claude Code 2.1, Python 3.13 via uv, and Node 24. 
 - Node.js 20+ (only for building the front end).
 - On Linux: bubblewrap and socat (`sudo apt install bubblewrap socat`), used by Claude Code's shell sandbox. On macOS the sandbox uses the built-in Seatbelt and needs nothing extra. Windows is not supported (the sandbox doesn't run there).
 - Recommended: poppler-utils (`pdftotext`, `pdfimages`, `pdfinfo`), which Claude uses for better text and figure extraction.
+- For saving web pages as PDF: Google Chrome (used if installed), or Playwright's Chromium: `uv run playwright install chromium` (one time, ~150 MB).
 - Optional: paper-reading skills under `~/.claude/skills/` (e.g. `paper_read_en`, `paper_read_cn`).
 
 ### Configuration
@@ -39,6 +40,7 @@ All optional, set as environment variables:
 | `PAPER_VIEWER_MODEL` | CLI default | Model for Claude, e.g. `opus`, `sonnet`, `haiku` |
 | `PAPER_VIEWER_CLAUDE` | `claude` on `PATH` | Path to the Claude CLI |
 | `PAPER_VIEWER_MAX_MATERIAL_MB` | `50` | Size limit for each additional material |
+| `PAPER_VIEWER_WEBPAGE_WIDTH` | `1000` | Width (CSS pixels) at which web pages are laid out when saved as PDF |
 
 Example: `PAPER_VIEWER_MODEL=sonnet uv run python -m backend`
 
@@ -81,10 +83,21 @@ How a link is turned into a PDF:
 
 1. Known sites are mapped straight to their PDF link: arXiv (`/abs/`, `/pdf/`, `/html/`), Hugging Face papers and alphaXiv (via arXiv), OpenReview, ACL Anthology, bioRxiv / medRxiv, NeurIPS proceedings, CVF open access.
 2. Any other link is fetched. If it returns a PDF, that's it. If it returns a web page, the app follows the page's `citation_pdf_url` tag, which most publishers set (e.g. DOI links to Nature).
+3. A web page with no PDF behind it (a blog post, a news article, documentation) is **saved as a PDF that looks like the page**, similar to Zotero's snapshots. See [Web pages](#web-pages).
 
 Tested sites: arXiv, Hugging Face, ACL Anthology, NeurIPS, CVF, bioRxiv, Nature (direct and via `doi.org`) all work. **OpenReview fails:** it requires a browser check before downloads, which the app does not try to get around. Paywalled papers fail unless your network has access.
 
 Downloads are limited to 100 MB, and the app checks that the file really is a PDF.
+
+#### Web pages
+
+For a web page, the app opens it in headless Chrome and prints it as a PDF:
+
+- It uses the page's **screen** styles (not its print stylesheet), with backgrounds and images, at a desktop width of 1000 px, cut into pages with A4 proportions. So it looks like the site, not like a printout.
+- The PDF contains the page's real text, not a screenshot: selecting, highlighting and Claude's clickable quotes work exactly as with a paper.
+- Before printing, the app scrolls through the page so lazily loaded images appear, hides cookie/consent dialogs and other full-screen overlays, lets sticky headers and buttons scroll with the page (so they don't repeat on every page), and undoes scroll locks.
+- The session title is the page title, and Claude is told that the "paper" is a web page saved as PDF.
+- Saving takes about 5–10 seconds. Tested with Lil'Log, Karpathy's blog, Jay Alammar's Illustrated Transformer, Distill and The Guardian.
 
 ### 3. Claude reads the paper
 
@@ -188,6 +201,7 @@ backend/
   app.py               HTTP API, PDF upload, title detection, static files
   claude_runner.py     runs `claude`, system prompt, permissions, streaming
   papers.py            storing the paper, title detection, downloading from links
+  webpage.py           saving a web page as a PDF that looks like the site
   db.py                SQLite schema and queries
   config.py            paths and environment variables
   hooks/check_paths.py hook that keeps Write/Edit inside the session folder
@@ -309,7 +323,8 @@ When a call is refused, Claude sees why and can try another way.
 - Quotes from equations, tables and figures usually can't be highlighted, because the PDF text there is not in reading order. Claude is told to quote the surrounding sentence instead.
 - Scanned PDFs without a text layer can't be highlighted.
 - Paper links from OpenReview and paywalled publishers can't be downloaded automatically; open the PDF by hand instead.
-- When a session has no paper yet, any link in a message is tried as a paper. For a link that isn't a paper (e.g. GitHub), the download fails and Claude simply answers.
+- When a session has no paper yet, the first link in a message becomes the paper: a PDF if there is one, else the web page saved as PDF. That includes links you only meant to mention (e.g. a GitHub page); start a new session if that happens.
+- Saved web pages: pages that need a login, pages behind a bot check ("verify you are human"), and pages that build their content only after interaction may come out empty or incomplete. A page break can cut through a line of text or an image, and very unusual layouts (e.g. content in an inner scrolling box) may be cut off. The app answers HTTP errors with an error instead of saving an error page.
 - All pages are rendered at once; very long documents (hundreds of pages) may be slow.
 
 ## Out of scope

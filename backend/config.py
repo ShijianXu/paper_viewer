@@ -21,6 +21,8 @@ HOOK_SCRIPT = Path(__file__).resolve().parent / "hooks" / "check_paths.py"
 
 PDF_NAME = "paper.pdf"
 MATERIALS_DIR = "materials"  # extra files for Claude, inside the session folder
+# Width (CSS px) at which web pages are laid out and saved as PDF.
+WEBPAGE_WIDTH = int(os.environ.get("PAPER_VIEWER_WEBPAGE_WIDTH", "1000"))
 MAX_MATERIAL_BYTES = int(os.environ.get("PAPER_VIEWER_MAX_MATERIAL_MB", "50")) * 1024 * 1024
 
 
