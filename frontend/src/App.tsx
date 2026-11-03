@@ -35,6 +35,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
   const [split, setSplit] = useState(55) // PDF pane width in %
   const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null)
   const [pageIndexes, setPageIndexes] = useState<PageIndex[] | null>(null)
@@ -327,7 +328,8 @@ export default function App() {
   return (
     <div className="app">
       {sidebarOpen && (
-        <aside className="sidebar">
+        <aside className="sidebar" style={{ width: sidebarWidth }}>
+          <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
           <div className="sidebar-head">
             <button className="primary" onClick={() => selectSession(null)}>
               + New session
@@ -423,6 +425,64 @@ class ErrorBoundary extends Component<{ fallback: ReactNode; children: ReactNode
   render() {
     return this.state.failed ? this.props.fallback : this.props.children
   }
+}
+
+const SIDEBAR_WIDTH = { default: 260, min: 180, max: 640 }
+const SIDEBAR_WIDTH_KEY = 'paper-viewer.sidebar-width'
+
+function loadSidebarWidth(): number {
+  try {
+    const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY))
+    if (saved >= SIDEBAR_WIDTH.min && saved <= SIDEBAR_WIDTH.max) return saved
+  } catch {
+    /* storage unavailable */
+  }
+  return SIDEBAR_WIDTH.default
+}
+
+/** Drag handle on the sidebar's right edge; double-click resets the width. The width is remembered. */
+function SidebarResizer({ width, onResize }: { width: number; onResize: (px: number) => void }) {
+  const save = (px: number) => {
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(px))
+    } catch {
+      /* storage unavailable */
+    }
+  }
+  const start = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    const startX = e.clientX
+    let current = width
+    const move = (ev: PointerEvent) => {
+      const max = Math.min(SIDEBAR_WIDTH.max, window.innerWidth * 0.5)
+      current = Math.round(Math.min(max, Math.max(SIDEBAR_WIDTH.min, width + ev.clientX - startX)))
+      onResize(current)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      document.body.classList.remove('dragging')
+      save(current)
+    }
+    document.body.classList.add('dragging')
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+  const reset = () => {
+    onResize(SIDEBAR_WIDTH.default)
+    save(SIDEBAR_WIDTH.default)
+  }
+  return (
+    <div
+      className="sidebar-resizer"
+      onPointerDown={start}
+      onDoubleClick={reset}
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the session list"
+      title="Drag to resize · double-click to reset"
+    />
+  )
 }
 
 function Divider({ onDrag }: { onDrag: (percent: number) => void }) {
