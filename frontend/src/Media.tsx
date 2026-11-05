@@ -38,7 +38,14 @@ let mermaidReady: Promise<typeof import('mermaid').default> | null = null
 function loadMermaid(dark: boolean) {
   // Loaded on first use: the library is large, and most answers have no diagram.
   mermaidReady ??= import('mermaid').then(({ default: mermaid }) => {
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' })
+    // suppressErrorRendering: on a syntax error, don't add mermaid's own error
+    // graphic to the page; the component shows the code and the error instead.
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: dark ? 'dark' : 'default',
+      suppressErrorRendering: true,
+    })
     return mermaid
   })
   return mermaidReady
@@ -54,9 +61,17 @@ export function MermaidDiagram({ code }: { code: string }) {
     let cancelled = false
     const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
     loadMermaid(dark)
-      .then((mermaid) => mermaid.render(id, code))
+      .then(async (mermaid) => {
+        await mermaid.parse(code) // throws on a syntax error, before anything is drawn
+        return mermaid.render(id, code)
+      })
       .then(({ svg }) => !cancelled && setSvg(svg))
-      .catch((e) => !cancelled && setError(String(e?.message ?? e).split('\n')[0]))
+      .catch((e) => !cancelled && setError(String(e?.message ?? e)))
+      .finally(() => {
+        // mermaid draws in temporary elements attached to <body>; never leave one behind.
+        document.getElementById(id)?.remove()
+        document.getElementById(`d${id}`)?.remove()
+      })
     return () => {
       cancelled = true
     }
@@ -68,7 +83,13 @@ export function MermaidDiagram({ code }: { code: string }) {
         <pre>
           <code>{code}</code>
         </pre>
-        <span className="muted small">Diagram could not be drawn: {error}</span>
+        <span className="muted small">Diagram could not be drawn: {error.split('\n')[0]}</span>
+        {error.includes('\n') && (
+          <details className="muted small">
+            <summary>Details</summary>
+            <pre>{error.split('\n').slice(1).join('\n')}</pre>
+          </details>
+        )}
       </div>
     )
   }
