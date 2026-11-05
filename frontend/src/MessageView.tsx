@@ -6,7 +6,7 @@ import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import type { Message, PdfSelection, ToolCall } from './api'
 import { parseCitations, type Citation } from './citations'
-import { MediaFile, MermaidDiagram, mediaUrl } from './Media'
+import { MediaFile, MermaidDiagram, PlotlyChart, mediaUrl } from './Media'
 
 type Props = {
   message: Pick<Message, 'id' | 'role' | 'text' | 'tools' | 'error'> & { selection?: PdfSelection | null }
@@ -53,15 +53,19 @@ function MessageView({ message, streaming, hue, active, found, onCite, onShowSel
       },
       img({ src, alt }) {
         const url = mediaUrl(typeof src === 'string' ? src : undefined, sessionId, message.id)
-        return url ? <MediaFile src={url} alt={alt ?? ''} /> : <span className="media-missing">[{alt || 'image'}]</span>
+        if (!url) return <span className="media-missing">[{alt || 'image'}]</span>
+        // ![title](figures/x.plotly.json): an interactive chart stored in a file.
+        if (/\.plotly\.json$/i.test(url.split('?')[0])) return streaming ? null : <PlotlyChart src={url} />
+        return <MediaFile src={url} alt={alt ?? ''} />
       },
       pre({ node, children }) {
-        // ```mermaid blocks become diagrams (once the answer is complete).
+        // ```mermaid and ```plotly blocks become diagrams and charts (once the answer is complete).
         const code = node?.children[0]
         const classes = code?.type === 'element' ? code.properties.className : undefined
-        if (!streaming && Array.isArray(classes) && classes.includes('language-mermaid') && code?.type === 'element') {
+        if (!streaming && Array.isArray(classes) && code?.type === 'element') {
           const text = code.children.map((c) => (c.type === 'text' ? c.value : '')).join('')
-          return <MermaidDiagram code={text} />
+          if (classes.includes('language-mermaid')) return <MermaidDiagram code={text} />
+          if (classes.includes('language-plotly')) return <PlotlyChart spec={text} />
         }
         return <pre>{children}</pre>
       },

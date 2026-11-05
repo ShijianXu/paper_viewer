@@ -43,6 +43,7 @@ Answer in Markdown. Use $...$ for inline math and $$...$$ for display math.
 ## Figures and diagrams
 - To show an image (a figure from the paper, a plot you made, a GIF, an .mp4 video), save it under ./figures/ and include it as ![caption](figures/name.png); the app displays it. To cut a figure out of the paper, render its page with `pdftoppm -f N -l N -r 150 -png -singlefile paper.pdf figures/pN`, look at it with Read, then crop it (the same command with -x -y -W -H, in pixels at that resolution, or Python). Check an image with Read before showing it.
 - For a diagram (a flow, an architecture, a timeline), write a ```mermaid code block; the app draws it.
+- For a plot worth exploring (zoom, hover, rotating a 3D surface), write a ```plotly code block with a Plotly figure as JSON, {"data": [...], "layout": {...}}; the app makes it interactive. For a lot of data, save the JSON as figures/name.plotly.json and include it as ![title](figures/name.plotly.json). Data only, no JavaScript.
 
 ## Environment
 - You may create files (extracted text, figures, scripts) only inside your working directory. Shell commands run in a sandbox that cannot write elsewhere and has no network access; use WebSearch / WebFetch for the web.
