@@ -14,6 +14,7 @@ The app is a thin front end over the **Claude Code CLI (`claude`) installed on y
 - **Papers from anywhere:** open a PDF, or paste a link (arXiv, ACL Anthology, a DOI, …). A blog post or article is saved as a PDF that looks like the website.
 - **Your own highlights**, in six colours, saved with the session.
 - **Ask about a passage:** select text in the PDF and ask Claude about exactly that.
+- **Figures and diagrams in answers:** Claude can show figures cut from the paper, plots, GIFs and videos, and draw diagrams.
 - **Extra materials:** give Claude other papers, notes, images or data to draw on.
 - **Saved sessions**, like any chat app; reopen one and keep asking.
 - **Safe by design:** Claude runs in a sandbox and can't change anything outside the session's own folder.
@@ -95,6 +96,13 @@ Select text in the PDF (drag, or double-click a word). A bar appears with six co
 
 *Asking about a selected passage. On the left, the passage is outlined, and one of your own highlights is shown in blue.*
 
+### Figures and diagrams
+
+Ask for them in plain words, e.g. "show me Figure 2" or "draw a diagram of the encoder":
+
+- **Images:** Claude saves the image in the session folder (`figures/`) and shows it in its answer: a figure cut out of the paper (with `pdftoppm`), a plot it made (needs Python with matplotlib on your machine), an animated GIF, or a video (`.mp4`, `.webm`). Click an image to open it full size.
+- **Diagrams:** flows, architectures and timelines are written as [Mermaid](https://mermaid.js.org) and drawn in the chat once the answer is complete.
+
 ### Additional materials
 
 Give Claude extra files to draw on: other papers, notes, images, data, anything.
@@ -117,7 +125,7 @@ Give Claude extra files to draw on: other papers, notes, images, data, anything.
 | Storage | SQLite (one file in the data folder) |
 | Front end | React + TypeScript, built with Vite |
 | PDF rendering | PDF.js via `react-pdf` (its text layer is used for highlighting) |
-| Chat rendering | `react-markdown` with GFM tables and KaTeX math |
+| Chat rendering | `react-markdown` with GFM tables, KaTeX math and Mermaid diagrams |
 | Web page capture | Playwright driving headless Chrome |
 
 The backend also serves the built front end, so there is one process and one port.
@@ -159,6 +167,7 @@ frontend/src/
   App.tsx              layout, sessions, sending messages, materials
   PdfPane.tsx          PDF rendering, highlights, selection bar, scroll-to-quote, zoom
   MessageView.tsx      one chat message: Markdown, quotes, tool list
+  Media.tsx            images, GIFs, videos and Mermaid diagrams in answers
   citations.ts         parsing <cite> tags, finding quotes and highlights in the PDF text
   api.ts               calls to the backend
 ```
@@ -192,7 +201,7 @@ claude -p --output-format stream-json --verbose --include-partial-messages \
 - Follow-up messages use `--resume`, so Claude keeps the paper and the conversation in context.
 - The run is a background task on the server: it is saved even if the browser disconnects.
 - If Claude can't resume its session (its history under `~/.claude/` was deleted), the backend starts a new Claude session and sends the saved transcript along with the new message.
-- The system prompt (in `claude_runner.py`) explains the citation format, materials, Markdown/math formatting and the sandbox rules.
+- The system prompt is `SYSTEM_PROMPT` in `claude_runner.py` (about 720 tokens), added to Claude Code's own prompt with `--append-system-prompt`. It explains the citation format, materials, figures and diagrams, formatting and the sandbox rules. `--system-prompt-snapshot off` makes every message use the current prompt; by default Claude Code keeps the prompt a conversation started with, so changes would only reach new sessions.
 
 ### Citations
 
@@ -267,6 +276,7 @@ When a call is refused, Claude sees why and can try another way.
 | `DELETE /api/sessions/{id}` | Delete the session, its folder and its PDF |
 | `POST /api/sessions/{id}/pdf` | Upload the paper (multipart `file`); only once per session |
 | `GET /api/sessions/{id}/pdf` | The paper |
+| `GET /api/sessions/{id}/files/{path}` | A file from the session folder (e.g. an image in an answer); only inside the folder, served with a no-scripts Content-Security-Policy |
 | `POST /api/sessions/{id}/messages` | Send `{"text": ..., "selection": {"page", "ranges", "text"} or null}`; the response is a stream of JSON lines: `text` (a piece of the answer), `tool` (a tool call, including `Download`), `pdf` (the paper was downloaded from a link), `done` (the saved answer) |
 | `POST /api/sessions/{id}/stop` | Stop the current answer |
 | `POST /api/sessions/{id}/highlights` | Save a user highlight (`page`, `ranges`, `text`, `color`) |

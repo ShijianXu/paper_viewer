@@ -116,6 +116,25 @@ def get_pdf(session_id: str) -> FileResponse:
     return FileResponse(config.original_pdf(session_id), media_type="application/pdf")
 
 
+# Files from the session folder (images Claude made, ...) are shown inside the
+# app, so they must not be able to run code there: no scripts, no plugins.
+FILE_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox",
+    "X-Content-Type-Options": "nosniff",
+}
+
+
+@app.get("/api/sessions/{session_id}/files/{path:path}")
+def get_file(session_id: str, path: str) -> FileResponse:
+    """A file from the session folder, e.g. an image Claude made and shows in an answer."""
+    _require(session_id)
+    root = config.session_dir(session_id).resolve()
+    target = (root / path).resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        raise HTTPException(404, "File not found")
+    return FileResponse(target, headers=FILE_HEADERS)
+
+
 # ---------------------------------------------------------------- additional materials
 
 

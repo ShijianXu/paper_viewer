@@ -364,3 +364,28 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
 .materials-list ul { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow-y: auto; }
 .materials-list li { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 14px; }
 .material-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- images and diagrams in answers */
+
+.markdown .media-link { display: inline-block; max-width: 100%; }
+.markdown .media {
+  display: block;
+  max-width: 100%;
+  max-height: 480px;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: white; /* figures from papers assume a white page */
+}
+.markdown .media-link:hover .media { border-color: var(--accent); }
+.markdown .media-missing { color: var(--muted); font-style: italic; }
+.markdown .diagram {
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+  text-align: center;
+}
+.markdown .diagram svg { max-width: 100%; height: auto; }
+.markdown .diagram-error pre { margin-bottom: 4px; }

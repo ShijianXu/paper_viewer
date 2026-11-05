@@ -6,6 +6,7 @@ import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import type { Message, PdfSelection, ToolCall } from './api'
 import { parseCitations, type Citation } from './citations'
+import { MediaFile, MermaidDiagram, mediaUrl } from './Media'
 
 type Props = {
   message: Pick<Message, 'id' | 'role' | 'text' | 'tools' | 'error'> & { selection?: PdfSelection | null }
@@ -15,9 +16,10 @@ type Props = {
   found?: (key: string) => boolean | undefined // undefined: not checked yet
   onCite?: (c: Citation) => void
   onShowSelection?: (s: PdfSelection) => void
+  sessionId?: string // for images Claude saved in the session folder
 }
 
-function MessageView({ message, streaming, hue, active, found, onCite, onShowSelection }: Props) {
+function MessageView({ message, streaming, hue, active, found, onCite, onShowSelection, sessionId }: Props) {
   const { markdown, citations } = useMemo(
     () => parseCitations(message.text, message.id, streaming),
     [message.text, message.id, streaming],
@@ -49,8 +51,22 @@ function MessageView({ message, streaming, hue, active, found, onCite, onShowSel
           </a>
         )
       },
+      img({ src, alt }) {
+        const url = mediaUrl(typeof src === 'string' ? src : undefined, sessionId, message.id)
+        return url ? <MediaFile src={url} alt={alt ?? ''} /> : <span className="media-missing">[{alt || 'image'}]</span>
+      },
+      pre({ node, children }) {
+        // ```mermaid blocks become diagrams (once the answer is complete).
+        const code = node?.children[0]
+        const classes = code?.type === 'element' ? code.properties.className : undefined
+        if (!streaming && Array.isArray(classes) && classes.includes('language-mermaid') && code?.type === 'element') {
+          const text = code.children.map((c) => (c.type === 'text' ? c.value : '')).join('')
+          return <MermaidDiagram code={text} />
+        }
+        return <pre>{children}</pre>
+      },
     }),
-    [citations, found, onCite],
+    [citations, found, onCite, sessionId, message.id, streaming],
   )
 
   if (message.role === 'user') {

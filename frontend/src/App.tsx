@@ -669,9 +669,10 @@ function ChatPane({
             found={found}
             onCite={onCite}
             onShowSelection={onShowSelection}
+            sessionId={session?.id}
           />
         ))}
-        {draft && <MessageView message={{ id: -1, role: 'assistant', error: null, ...draft }} hue={nextHue} streaming />}
+        {draft && <MessageView message={{ id: -1, role: 'assistant', error: null, ...draft }} hue={nextHue} sessionId={session?.id} streaming />}
         {!draft && session?.running && <div className="thinking">Claude is still answering…</div>}
       </div>
 
