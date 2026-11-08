@@ -31,6 +31,8 @@ uv run python -m backend
 
 Then open <http://127.0.0.1:8000>.
 
+After pulling or changing the front end, repeat step 1 and restart. At startup the backend warns if the build is older than the front-end sources or if `npm install` is needed; an old build silently lacks newer features (e.g. images in answers show as broken).
+
 Tested on Linux (Ubuntu) with Claude Code 2.1, Python 3.13 via uv, and Node 24. macOS should work but has not been tested.
 
 ### Requirements
