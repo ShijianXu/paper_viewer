@@ -155,6 +155,13 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
 }
 .msg.assistant { border-left: 3px solid transparent; padding-left: 10px; margin-left: -13px; }
 .msg.assistant.active { border-left-color: hsl(var(--h, 20) 80% 50%); }
+.msg-actions { display: flex; gap: 4px; margin-top: 6px; }
+.msg-action {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0; border: none; border-radius: 6px;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.msg-action:hover { background: var(--bg-sunken); color: var(--fg); }
 .msg-error { color: var(--danger); font-size: 13px; margin-top: 6px; white-space: pre-wrap; }
 .thinking { color: var(--muted); font-style: italic; }
 

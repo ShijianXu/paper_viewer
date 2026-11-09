@@ -33,6 +33,11 @@ export function parseCitations(
   return { markdown, citations }
 }
 
+/** Plain Markdown for copying: each cite tag becomes `"quote" (p. N)`. */
+export function citationsToMarkdown(text: string): string {
+  return text.replace(CITE_RE, (_m, page: string, quote: string) => `“${quote.replace(/\s+/g, ' ').trim()}” (p. ${page})`)
+}
+
 /** While streaming, don't show a cite tag until it is complete. */
 function hidePartialCite(text: string): string {
   const open = text.lastIndexOf('<cite')

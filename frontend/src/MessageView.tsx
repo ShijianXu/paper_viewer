@@ -1,11 +1,11 @@
-import { memo, useMemo, type CSSProperties } from 'react'
+import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import type { Message, PdfSelection, ToolCall } from './api'
-import { parseCitations, type Citation } from './citations'
+import { citationsToMarkdown, parseCitations, type Citation } from './citations'
 import { MediaFile, MermaidDiagram, PlotlyChart, mediaUrl } from './Media'
 
 type Props = {
@@ -105,6 +105,52 @@ function MessageView({ message, streaming, hue, active, found, onCite, onShowSel
       )}
       {streaming && !markdown && <div className="thinking">Claude is working…</div>}
       {message.error && <div className="msg-error">{message.error}</div>}
+      {!streaming && message.text && <CopyButton text={message.text} />}
+    </div>
+  )
+}
+
+/** Copies the answer as Markdown (math stays as $…$ / $$…$$), so it renders when pasted into a Markdown app. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(t)
+  }, [copied])
+
+  const copy = async () => {
+    const md = citationsToMarkdown(text)
+    try {
+      await navigator.clipboard.writeText(md)
+    } catch {
+      // Clipboard API unavailable (e.g. not a secure context): fall back to a hidden textarea.
+      const ta = document.createElement('textarea')
+      ta.value = md
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      ta.remove()
+    }
+    setCopied(true)
+  }
+
+  return (
+    <div className="msg-actions">
+      <button className="msg-action" onClick={copy} title={copied ? 'Copied' : 'Copy as Markdown'} aria-label="Copy as Markdown">
+        {copied ? (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        ) : (
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="9" width="12" height="12" rx="2" />
+            <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+          </svg>
+        )}
+      </button>
     </div>
   )
 }
