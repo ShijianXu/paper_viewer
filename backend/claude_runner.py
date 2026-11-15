@@ -37,6 +37,9 @@ Whenever a statement in your answer is supported by a specific passage of the pa
 ## Additional materials
 The user may add supplementary files (other papers, notes, images, data, ...) in ./materials/. You are told when files are added or removed. Use them as complementary information. Cite tags are only for paper.pdf: when you use a material, name the file instead (e.g. "according to materials/notes.txt, ..."). The files are read-only.
 
+## Pasted images
+The user can paste images (screenshots, crops of figures or equations, ...) into a message. They are saved in ./attachments/ and the message lists them. Look at them with the Read tool. They stay there, so you can look at an earlier one again if a later question refers to it. They are read-only.
+
 ## Formatting
 Answer in Markdown. Use $...$ for inline math and $$...$$ for display math.
 
@@ -117,19 +120,28 @@ def _announce_materials(session_id: str) -> tuple[str, list[int]]:
     return note, [m["id"] for m in new + gone]
 
 
-def _with_selection(text: str, selection: dict | None) -> str:
-    """The user's question, preceded by the PDF passage it is about (if any)."""
-    if not selection:
-        return text
-    quoted = "\n".join(f"> {line}" for line in selection["text"].splitlines())
-    return (
-        f"[The user selected this passage on page {selection['page']} of the paper and asks about it:]\n"
-        f"{quoted}\n\n{text}"
-    )
+def _user_turn(text: str, selection: dict | None, images: list[str] | None = None) -> str:
+    """The user's question, preceded by the images and PDF passage it is about (if any)."""
+    prefix = ""
+    if images:
+        files = "\n".join(f"- ./{config.ATTACHMENTS_DIR}/{name}" for name in images)
+        prefix += (
+            f"[The user pasted {'an image' if len(images) == 1 else f'{len(images)} images'} into this message "
+            "(e.g. a screenshot, or a figure, table or equation cropped from the paper). "
+            f"Look at {'it' if len(images) == 1 else 'each'} with the Read tool before answering:\n{files}]\n\n"
+        )
+        if not text:
+            text = "(No text: the user sent only the image(s). Work out what they want from the image and the context.)"
+    if selection:
+        quoted = "\n".join(f"> {line}" for line in selection["text"].splitlines())
+        prefix += f"[The user selected this passage on page {selection['page']} of the paper and asks about it:]\n{quoted}\n\n"
+    return prefix + text
 
 
 def _transcript(messages: list[dict], limit: int = 40_000) -> str:
-    parts = [f"{m['role'].upper()}:\n{_with_selection(m['text'], m.get('selection'))}" for m in messages]
+    parts = [
+        f"{m['role'].upper()}:\n{_user_turn(m['text'], m.get('selection'), m.get('images'))}" for m in messages
+    ]
     text = "\n\n".join(parts)
     return text[-limit:]
 
@@ -187,12 +199,15 @@ def is_running(session_id: str) -> bool:
     return session_id in RUNS
 
 
-def start(session_id: str, user_text: str, selection: dict | None = None) -> Run:
-    """Save the user message and start a background turn. Caller checks is_running first."""
+def start(session_id: str, user_text: str, selection: dict | None = None, images: list[str] | None = None) -> Run:
+    """Save the user message and start a background turn. Caller checks is_running first.
+
+    images: names of files in the session's attachments folder sent with the message.
+    """
     run = Run(session_id)
     RUNS[session_id] = run
-    db.add_message(session_id, "user", user_text, selection=selection)
-    run.task = asyncio.create_task(_turn(run, user_text, selection))
+    db.add_message(session_id, "user", user_text, selection=selection, images=images)
+    run.task = asyncio.create_task(_turn(run, user_text, selection, images))
     return run
 
 
@@ -206,9 +221,9 @@ async def stop(session_id: str) -> bool:
     return True
 
 
-async def _turn(run: Run, user_text: str, selection: dict | None) -> None:
+async def _turn(run: Run, user_text: str, selection: dict | None, images: list[str] | None) -> None:
     sid = run.session_id
-    question = _with_selection(user_text, selection)
+    question = _user_turn(user_text, selection, images)
     # text: the answer; tools: short list of tool calls (kept for older messages);
     # trace: every step in order (text, thinking, tool calls with input and output,
     # subagent steps, final stats), streamed to the browser as it happens.

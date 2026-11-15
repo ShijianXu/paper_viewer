@@ -48,6 +48,7 @@ export type Message = {
   trace?: TraceStep[] | null // missing for answers saved before traces existed
   error: string | null
   selection: PdfSelection | null // the passage a question is about
+  images?: string[] // pasted images: file names in the session's attachments/ folder (or blob: URLs while sending)
   created_at: number
 }
 
@@ -122,8 +123,15 @@ export const api = {
   },
 
   /** Send a message and call onEvent for each streamed event until the answer is done. */
-  async sendMessage(id: string, text: string, selection: PdfSelection | null, onEvent: (e: StreamEvent) => void) {
-    const res = await fetch(`/api/sessions/${id}/messages`, json('POST', { text, selection }))
+  async sendMessage(
+    id: string,
+    text: string,
+    selection: PdfSelection | null,
+    images: Blob[],
+    onEvent: (e: StreamEvent) => void,
+  ) {
+    const encoded = await Promise.all(images.map(toDataUrl))
+    const res = await fetch(`/api/sessions/${id}/messages`, json('POST', { text, selection, images: encoded }))
     if (!res.ok || !res.body) {
       let detail = res.statusText
       try {
@@ -148,3 +156,16 @@ export const api = {
     }
   },
 }
+
+function toDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(blob)
+  })
+}
+
+/** Where a message's pasted image is shown from. */
+export const attachmentUrl = (sessionId: string | undefined, name: string) =>
+  name.startsWith('blob:') ? name : sessionId ? `/api/sessions/${sessionId}/files/attachments/${encodeURIComponent(name)}` : ''

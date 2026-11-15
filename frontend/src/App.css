@@ -241,6 +241,33 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
 .composer textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 .composer-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 
+/* Images pasted into the composer, and shown in the sent message. */
+.pasted-images { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.pasted-image { position: relative; }
+.pasted-image img {
+  display: block;
+  height: 64px;
+  max-width: 160px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.pasted-image .icon {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  line-height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.paste-error { color: var(--danger); margin-bottom: 6px; }
+.msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.msg-images img { display: block; max-height: 160px; max-width: 100%; border-radius: 6px; }
+
 /* ---------------------------------------------------------------- PDF */
 
 .pdf-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-sunken); }

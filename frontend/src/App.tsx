@@ -16,6 +16,10 @@ import PdfPane, { type AskMark, type ShownHighlight } from './PdfPane'
 import './App.css'
 
 type Draft = { text: string; tools: ToolCall[]; trace: TraceStep[] }
+/** An image pasted into the composer; url: a blob: URL for its thumbnail. */
+type PastedImage = { file: File; url: string }
+const MAX_IMAGES = 10 // per message; the server allows as many
+const MAX_IMAGE_MB = 10
 
 const EXAMPLES = [
   'Summarize this paper and explain the main method.',
@@ -210,7 +214,7 @@ export default function App() {
     return s.id
   }
 
-  async function send(text: string, selection: PdfSelection | null) {
+  async function send(text: string, selection: PdfSelection | null, images: PastedImage[] = []) {
     setError(null)
     setAskSelection(null)
     let id: string | null = null
@@ -218,9 +222,12 @@ export default function App() {
       id = await ensureSession()
       const sid = id
       const now = Date.now() / 1000
-      setMessages((m) => [...m, { id: -2, role: 'user', text, tools: [], error: null, selection, created_at: now }])
+      const user: Message = {
+        id: -2, role: 'user', text, tools: [], error: null, selection, images: images.map((i) => i.url), created_at: now,
+      }
+      setMessages((m) => [...m, user])
       setDraft({ text: '', tools: [], trace: [] })
-      await api.sendMessage(sid, text, selection, (ev) => {
+      await api.sendMessage(sid, text, selection, images.map((i) => i.file), (ev) => {
         if (currentIdRef.current !== sid) return
         if (ev.type === 'text') setDraft((d) => d && { ...d, text: d.text + ev.text })
         else if (ev.type === 'tool') setDraft((d) => d && { ...d, tools: [...d.tools, { name: ev.name, summary: ev.summary }] })
@@ -528,7 +535,7 @@ type ChatProps = {
   activeMessageId: number | null
   found: (key: string) => boolean | undefined
   onCite: (c: Citation) => void
-  onSend: (text: string, selection: PdfSelection | null) => void
+  onSend: (text: string, selection: PdfSelection | null, images: PastedImage[]) => void
   askSelection: PdfSelection | null
   onClearAsk: () => void
   onShowSelection: (s: PdfSelection) => void
@@ -565,6 +572,8 @@ function ChatPane({
   const materialInput = useRef<HTMLInputElement>(null)
   const [showMaterials, setShowMaterials] = useState(false)
   const [text, setText] = useState('')
+  const [images, setImages] = useState<PastedImage[]>([])
+  const [pasteError, setPasteError] = useState<string | null>(null)
   const textarea = useRef<HTMLTextAreaElement>(null)
 
   // A passage was attached: type the question right away.
@@ -585,10 +594,43 @@ function ChatPane({
 
   const submit = () => {
     const t = text.trim() || (askSelection ? 'Explain this passage.' : '')
-    if (!t || busy) return
+    if ((!t && !images.length) || busy) return
     stickToBottom.current = true
-    onSend(t, askSelection)
+    onSend(t, askSelection, images) // the sent message keeps showing the blob: URLs until it reloads
     setText('')
+    setImages([])
+    setPasteError(null)
+  }
+
+  // Ctrl+V of an image (a screenshot, a crop…) attaches it to the message, like in Claude Code.
+  const onPaste = (e: React.ClipboardEvent) => {
+    const items = [...e.clipboardData.items]
+    const files = items
+      .filter((i) => i.kind === 'file' && /^image\/(png|jpeg|gif|webp)$/.test(i.type))
+      .map((i) => i.getAsFile())
+      .filter((f): f is File => !!f)
+    if (!files.length) return
+    // Copying from some apps (office suites, web pages) puts text and a picture of it on the clipboard:
+    // then paste the text as usual, unless the clipboard holds nothing else.
+    if (items.some((i) => i.kind === 'string' && i.type === 'text/plain')) return
+    e.preventDefault()
+    const tooBig = files.filter((f) => f.size > MAX_IMAGE_MB << 20)
+    const room = MAX_IMAGES - images.length
+    const ok = files.filter((f) => f.size <= MAX_IMAGE_MB << 20).slice(0, Math.max(room, 0))
+    setPasteError(
+      tooBig.length
+        ? `Images larger than ${MAX_IMAGE_MB} MB can't be attached.`
+        : ok.length < files.length
+          ? `At most ${MAX_IMAGES} images per message.`
+          : null,
+    )
+    setImages((cur) => [...cur, ...ok.map((file) => ({ file, url: URL.createObjectURL(file) }))])
+  }
+
+  const removeImage = (img: PastedImage) => {
+    URL.revokeObjectURL(img.url)
+    setImages((cur) => cur.filter((i) => i !== img))
+    setPasteError(null)
   }
 
   const onDrop = (e: React.DragEvent) => {
@@ -701,6 +743,21 @@ function ChatPane({
             </button>
           </div>
         )}
+        {images.length > 0 && (
+          <div className="pasted-images">
+            {images.map((img, i) => (
+              <div className="pasted-image" key={img.url}>
+                <a href={img.url} target="_blank" rel="noreferrer" title="Open full size">
+                  <img src={img.url} alt={`Pasted image ${i + 1}`} />
+                </a>
+                <button className="icon" onClick={() => removeImage(img)} title="Remove the image" aria-label={`Remove image ${i + 1}`}>
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {pasteError && <div className="paste-error small">{pasteError}</div>}
         <textarea
           ref={textarea}
           value={text}
@@ -713,6 +770,7 @@ function ChatPane({
           }
           rows={3}
           onChange={(e) => setText(e.target.value)}
+          onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
@@ -757,13 +815,13 @@ function ChatPane({
             }}
           />
           <span className="spacer" />
-          <span className="muted small">Enter to send · Shift+Enter for a new line</span>
+          <span className="muted small">Enter to send · Shift+Enter for a new line · Ctrl+V to attach an image</span>
           {busy ? (
             <button className="danger" onClick={onStop}>
               Stop
             </button>
           ) : (
-            <button className="primary" onClick={submit} disabled={!text.trim() && !askSelection}>
+            <button className="primary" onClick={submit} disabled={!text.trim() && !askSelection && !images.length}>
               Send
             </button>
           )}

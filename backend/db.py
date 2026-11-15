@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS messages (
     error       TEXT,
     selection   TEXT,                        -- JSON {page, ranges, text}: PDF passage the question is about
     trace       TEXT,                        -- JSON list of the steps of an answer (see claude_runner)
+    images      TEXT,                        -- JSON list of image file names in <session>/attachments/
     created_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, id);
@@ -67,7 +68,7 @@ def connect():
 
 
 # Columns added after the first release: (table, column, definition).
-MIGRATIONS = [("messages", "selection", "TEXT"), ("messages", "trace", "TEXT")]
+MIGRATIONS = [("messages", "selection", "TEXT"), ("messages", "trace", "TEXT"), ("messages", "images", "TEXT")]
 
 
 def init() -> None:
@@ -92,6 +93,7 @@ def _message(row: sqlite3.Row) -> dict:
     d["tools"] = json.loads(d["tools"])
     d["selection"] = json.loads(d["selection"]) if d["selection"] else None
     d["trace"] = json.loads(d["trace"]) if d.get("trace") else None
+    d["images"] = json.loads(d["images"]) if d.get("images") else []
     return d
 
 
@@ -242,15 +244,17 @@ def add_message(
     error: str | None = None,
     selection: dict | None = None,
     trace: list | None = None,
+    images: list[str] | None = None,
 ) -> dict:
     with connect() as c:
         cur = c.execute(
-            "INSERT INTO messages (session_id, role, text, tools, error, selection, trace, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO messages (session_id, role, text, tools, error, selection, trace, images, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session_id, role, text, json.dumps(tools or []), error,
                 json.dumps(selection) if selection else None,
-                json.dumps(trace) if trace else None, time.time(),
+                json.dumps(trace) if trace else None,
+                json.dumps(images) if images else None, time.time(),
             ),
         )
         row = c.execute("SELECT * FROM messages WHERE id = ?", (cur.lastrowid,)).fetchone()

@@ -4,12 +4,12 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
-import type { Message, PdfSelection, ToolCall, TraceStep } from './api'
+import { attachmentUrl, type Message, type PdfSelection, type ToolCall, type TraceStep } from './api'
 import { citationsToMarkdown, parseCitations, type Citation } from './citations'
 import { MediaFile, MermaidDiagram, PlotlyChart, mediaUrl } from './Media'
 
 type Props = {
-  message: Pick<Message, 'id' | 'role' | 'text' | 'tools' | 'trace' | 'error'> & { selection?: PdfSelection | null }
+  message: Pick<Message, 'id' | 'role' | 'text' | 'tools' | 'trace' | 'error' | 'images'> & { selection?: PdfSelection | null }
   streaming?: boolean
   hue?: number // highlight color of this answer's quotes
   active?: boolean
@@ -86,6 +86,15 @@ function MessageView({ message, streaming, hue, active, found, onCite, onShowSel
               <span className="quoted-page">p.{message.selection.page}</span>
               <span className="quoted-text">“{message.selection.text}”</span>
             </button>
+          )}
+          {message.images && message.images.length > 0 && (
+            <div className="msg-images">
+              {message.images.map((name) => (
+                <a key={name} href={attachmentUrl(sessionId, name)} target="_blank" rel="noreferrer" title="Open full size">
+                  <img src={attachmentUrl(sessionId, name)} alt="Pasted image" loading="lazy" />
+                </a>
+              ))}
+            </div>
           )}
           {message.text}
         </div>

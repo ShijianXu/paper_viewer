@@ -1,5 +1,6 @@
 """HTTP API and static file server."""
 
+import base64
 import json
 import logging
 import shutil
@@ -223,23 +224,43 @@ class Selection(BaseModel):
 class NewMessage(BaseModel):
     text: str
     selection: Selection | None = None
+    images: list[str] = Field(default=[], max_length=config.MAX_IMAGES)  # base64, or data: URLs
+
+
+def _decode_images(images: list[str]) -> list[bytes]:
+    """Pasted images as bytes; HTTP 400/413 if one is not a usable image."""
+    out = []
+    for item in images:
+        b64 = item.split(",", 1)[1] if item.startswith("data:") else item
+        if len(b64) > config.MAX_IMAGE_BYTES * 4 // 3 + 4:
+            raise HTTPException(413, f"An image is larger than {config.MAX_IMAGE_BYTES >> 20} MB")
+        try:
+            data = base64.b64decode(b64, validate=True)
+        except ValueError as e:
+            raise HTTPException(400, "An attached image is not valid base64") from e
+        if not papers.image_extension(data):
+            raise HTTPException(400, "Only PNG, JPEG, GIF and WebP images can be attached")
+        out.append(data)
+    return out
 
 
 @app.post("/api/sessions/{session_id}/messages")
 async def send_message(session_id: str, body: NewMessage) -> StreamingResponse:
     session = _require(session_id)
     text = body.text.strip()
-    if not text:
+    images = _decode_images(body.images)
+    if not text and not images:
         raise HTTPException(400, "Message is empty")
     if body.selection and not session["has_pdf"]:
         raise HTTPException(400, "This session has no paper")
     if claude_runner.is_running(session_id):
         raise HTTPException(409, "Claude is still answering the previous message")
     if session["title"] == "New session" and not session["has_pdf"]:
-        db.update_session(session_id, title=text[:60])
+        db.update_session(session_id, title=text[:60] or "Image")
 
     selection = body.selection.model_dump() if body.selection else None
-    run = claude_runner.start(session_id, text, selection)
+    image_names = papers.store_images(session_id, images) if images else []
+    run = claude_runner.start(session_id, text, selection, image_names)
 
     async def events():
         yield json.dumps({"type": "started"}) + "\n"

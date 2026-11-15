@@ -37,6 +37,9 @@ def main() -> int:
     if rel.split(os.sep)[0] == "materials":
         print("Blocked: materials/ holds the user's files and must not be modified.", file=sys.stderr)
         return 2
+    if rel.split(os.sep)[0] == "attachments":
+        print("Blocked: attachments/ holds images the user sent and must not be modified.", file=sys.stderr)
+        return 2
     return 0
 
 

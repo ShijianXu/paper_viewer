@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
@@ -163,6 +164,40 @@ def delete_material_file(session_id: str, filename: str) -> None:
     if path.is_file():
         path.chmod(0o600)
         path.unlink()
+
+
+# ---------------------------------------------------------------- pasted images
+
+IMAGE_TYPES = {  # magic bytes -> extension; the formats Claude can look at
+    b"\x89PNG\r\n\x1a\n": ".png",
+    b"\xff\xd8\xff": ".jpg",
+    b"GIF87a": ".gif",
+    b"GIF89a": ".gif",
+}
+
+
+def image_extension(data: bytes) -> str | None:
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    return next((ext for magic, ext in IMAGE_TYPES.items() if data.startswith(magic)), None)
+
+
+def store_images(session_id: str, images: list[bytes]) -> list[str]:
+    """Save images sent with a message (read-only for Claude); returns their file names."""
+    folder = config.session_dir(session_id) / config.ATTACHMENTS_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    names = []
+    for i, data in enumerate(images, 1):
+        ext = image_extension(data)
+        if not ext:
+            raise ValueError("Only PNG, JPEG, GIF and WebP images can be attached")
+        name = _material_name(folder, f"image-{stamp}-{i}{ext}")
+        dest = folder / name
+        dest.write_bytes(data)
+        os.chmod(dest, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+        names.append(name)
+    return names
 
 
 # ---------------------------------------------------------------- links
