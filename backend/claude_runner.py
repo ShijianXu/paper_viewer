@@ -134,6 +134,33 @@ def _transcript(messages: list[dict], limit: int = 40_000) -> str:
     return text[-limit:]
 
 
+CLIP = 20_000  # longest tool input string / tool output kept in a trace
+
+
+def _clip(value, limit: int = CLIP):
+    """Shorten long strings anywhere inside a tool input or output."""
+    if isinstance(value, str):
+        return value if len(value) <= limit else value[:limit] + f"\n… [{len(value) - limit} more characters]"
+    if isinstance(value, list):
+        return [_clip(v, limit) for v in value]
+    if isinstance(value, dict):
+        return {k: _clip(v, limit) for k, v in value.items()}
+    return value
+
+
+def _result_text(content) -> str:
+    """The text of a tool_result's content (a string or a list of blocks)."""
+    if isinstance(content, str):
+        return content
+    parts = []
+    for block in content or []:
+        if block.get("type") == "text":
+            parts.append(block.get("text", ""))
+        else:
+            parts.append(f"[{block.get('type', 'content')}]")
+    return "\n".join(parts)
+
+
 def _tool_summary(name: str, inp: dict) -> str:
     for key in ("command", "file_path", "notebook_path", "query", "url", "skill", "pattern", "description"):
         if inp.get(key):
@@ -182,7 +209,10 @@ async def stop(session_id: str) -> bool:
 async def _turn(run: Run, user_text: str, selection: dict | None) -> None:
     sid = run.session_id
     question = _with_selection(user_text, selection)
-    state = {"text": "", "tools": []}
+    # text: the answer; tools: short list of tool calls (kept for older messages);
+    # trace: every step in order (text, thinking, tool calls with input and output,
+    # subagent steps, final stats), streamed to the browser as it happens.
+    state = {"text": "", "tools": [], "trace": [], "tool_steps": {}, "open_block": None}
     error = None
     try:
         session = db.get_session(sid)
@@ -231,7 +261,7 @@ async def _turn(run: Run, user_text: str, selection: dict | None) -> None:
                 papers.restore_pdf_if_changed(session)
             except Exception:
                 log.exception("could not restore paper.pdf")
-            msg = db.add_message(sid, "assistant", state["text"], state["tools"], error)
+            msg = db.add_message(sid, "assistant", state["text"], state["tools"], error, trace=state["trace"])
             await run.queue.put({"type": "done", "message": msg})
         RUNS.pop(sid, None)
         await run.queue.put(None)
@@ -249,19 +279,23 @@ async def _download_linked_paper(run: Run, session: dict, text: str, state: dict
     for url in papers.find_urls(text)[:MAX_LINKS]:
         tool = {"name": "Download", "summary": url}  # "Download" also covers saving a web page
         state["tools"].append(tool)
-        await run.queue.put({"type": "tool", **tool})
+        step = await _add_step(run, state, {"type": "tool", "id": None, "parent": None, "name": "Download",
+                                            "summary": url, "input": {"url": url}, "result": None, "is_error": False})
         try:
             session, webpage_url = await papers.fetch_into_session(session["id"], url)
         except Exception as e:
             reason = str(e) if isinstance(e, papers.DownloadError) else f"{type(e).__name__}: {e}"
             log.info("download from %s failed: %s", url, reason)
             tool["summary"] = f"{url} (failed: {reason})"
+            await _set_step(run, state, step, result=reason, is_error=True)
             failures.append(f"- {url}: {reason}")
             continue
         tool["summary"] = f"{url} → {session['pdf_filename']}"
-        await run.queue.put({"type": "pdf"})
         if webpage_url:
             tool["summary"] += " (web page saved as PDF)"
+        await _set_step(run, state, step, result=tool["summary"])
+        await run.queue.put({"type": "pdf"})
+        if webpage_url:
             return session, (
                 f"[paper.pdf is the web page {webpage_url} (e.g. a blog post or article), saved as a PDF "
                 "that looks like the site. Treat it like a paper: read it and quote it with cite tags.]\n\n"
@@ -284,6 +318,7 @@ async def _invoke(run: Run, prompt: str, state: dict, *, resume: str | None = No
     cmd = [
         config.CLAUDE_BIN, "-p",
         "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+        "--forward-subagent-text",  # subagents' text, for the trace
         "--permission-mode", "dontAsk",
         "--settings", json.dumps(claude_settings(workdir)),
         "--append-system-prompt", SYSTEM_PROMPT,
@@ -319,19 +354,28 @@ async def _invoke(run: Run, prompt: str, state: dict, *, resume: str | None = No
             ev = json.loads(raw)
         except json.JSONDecodeError:
             continue
-        if ev.get("parent_tool_use_id"):
-            continue  # output of a subagent, not the main answer
+        parent = ev.get("parent_tool_use_id")
         kind = ev.get("type")
         if kind == "stream_event":
-            await _on_stream_event(run, ev["event"], state)
+            if not parent:  # subagent steps come whole, as assistant messages
+                await _on_stream_event(run, ev["event"], state)
         elif kind == "assistant":
-            for block in ev["message"].get("content", []):
-                if block.get("type") == "tool_use":
-                    tool = {"name": block["name"], "summary": _tool_summary(block["name"], block.get("input") or {})}
-                    state["tools"].append(tool)
-                    await run.queue.put({"type": "tool", **tool})
+            await _on_assistant(run, ev["message"], parent, state)
+        elif kind == "user":
+            await _on_user(run, ev["message"], state)
+        elif kind == "system" and ev.get("subtype") == "init":
+            state["model"] = ev.get("model")
         elif kind == "result":
             result = ev
+            await _add_step(run, state, {
+                "type": "result",
+                "model": state.get("model"),
+                "duration_ms": ev.get("duration_ms"),
+                "num_turns": ev.get("num_turns"),
+                "cost_usd": ev.get("total_cost_usd"),
+                "usage": {k: v for k, v in (ev.get("usage") or {}).items() if isinstance(v, int)},
+                "is_error": bool(ev.get("is_error")),
+            })
 
     await proc.wait()
     stderr = (await stderr_task).decode(errors="replace").strip()
@@ -344,13 +388,84 @@ async def _invoke(run: Run, prompt: str, state: dict, *, resume: str | None = No
 
 
 async def _on_stream_event(run: Run, event: dict, state: dict) -> None:
+    """Live text and thinking of the main conversation."""
     kind = event.get("type")
     if kind == "message_start" and state["text"] and not state["text"].endswith("\n\n"):
         await _emit_text(run, state, "\n\n")
+    elif kind == "content_block_start":
+        block_type = (event.get("content_block") or {}).get("type")
+        if block_type in ("text", "thinking", "redacted_thinking"):
+            step_type = "thinking" if block_type != "text" else "text"
+            state["open_block"] = await _add_step(run, state, {"type": step_type, "parent": None, "text": ""})
+        else:
+            state["open_block"] = None
+    elif kind == "content_block_stop":
+        state["open_block"] = None
     elif kind == "content_block_delta":
         delta = event.get("delta") or {}
         if delta.get("type") == "text_delta":
             await _emit_text(run, state, delta["text"])
+            await _step_delta(run, state, delta["text"])
+        elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+            await _step_delta(run, state, delta["thinking"])
+
+
+async def _on_assistant(run: Run, message: dict, parent: str | None, state: dict) -> None:
+    """A finished assistant message: tool calls, and for subagents also text and thinking."""
+    for block in message.get("content", []):
+        btype = block.get("type")
+        if btype == "tool_use":
+            inp = block.get("input") or {}
+            summary = _tool_summary(block["name"], inp)
+            if not parent:
+                tool = {"name": block["name"], "summary": summary}
+                state["tools"].append(tool)
+                await run.queue.put({"type": "tool", **tool})
+            index = await _add_step(run, state, {
+                "type": "tool", "id": block.get("id"), "parent": parent, "name": block["name"],
+                "summary": summary, "input": _clip(inp), "result": None, "is_error": False,
+            })
+            state["tool_steps"][block.get("id")] = index
+        elif parent and btype == "text" and block.get("text"):
+            await _add_step(run, state, {"type": "text", "parent": parent, "text": block["text"]})
+        elif parent and btype in ("thinking", "redacted_thinking"):
+            await _add_step(run, state, {"type": "thinking", "parent": parent, "text": block.get("thinking") or ""})
+
+
+async def _on_user(run: Run, message: dict, state: dict) -> None:
+    """Tool results (of the main conversation and of subagents)."""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return
+    for block in content:
+        if block.get("type") != "tool_result":
+            continue  # e.g. the prompt a subagent was given, already in the Task input
+        index = state["tool_steps"].get(block.get("tool_use_id"))
+        if index is not None:
+            await _set_step(run, state, index, result=_clip(_result_text(block.get("content"))),
+                            is_error=bool(block.get("is_error")))
+
+
+async def _add_step(run: Run, state: dict, step: dict) -> int:
+    state["trace"].append(step)
+    index = len(state["trace"]) - 1
+    # A copy: the step changes later, and the queue may be read after that.
+    await run.queue.put({"type": "step", "index": index, "step": dict(step)})
+    return index
+
+
+async def _set_step(run: Run, state: dict, index: int, **fields) -> None:
+    step = state["trace"][index]
+    step.update(fields)
+    await run.queue.put({"type": "step", "index": index, "step": dict(step)})
+
+
+async def _step_delta(run: Run, state: dict, text: str) -> None:
+    index = state["open_block"]
+    if index is None:
+        return
+    state["trace"][index]["text"] += text
+    await run.queue.put({"type": "step_delta", "index": index, "text": text})
 
 
 async def _emit_text(run: Run, state: dict, text: str) -> None:

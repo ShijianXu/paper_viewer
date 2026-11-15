@@ -10,6 +10,29 @@ export type Session = {
 
 export type ToolCall = { name: string; summary: string }
 
+/** One step of an answer, in order. parent: the Task tool call a subagent step belongs to. */
+export type TraceStep =
+  | { type: 'text' | 'thinking'; parent: string | null; text: string }
+  | {
+      type: 'tool'
+      id: string | null
+      parent: string | null
+      name: string
+      summary: string
+      input: Record<string, unknown>
+      result: string | null // null while the tool runs
+      is_error: boolean
+    }
+  | {
+      type: 'result'
+      model?: string | null
+      duration_ms?: number
+      num_turns?: number
+      cost_usd?: number
+      usage?: Record<string, number>
+      is_error: boolean
+    }
+
 /** A passage of the PDF; ranges: [itemIndex, start, end] in the page's text items. */
 export type PdfSelection = {
   page: number
@@ -22,6 +45,7 @@ export type Message = {
   role: 'user' | 'assistant'
   text: string
   tools: ToolCall[]
+  trace?: TraceStep[] | null // missing for answers saved before traces existed
   error: string | null
   selection: PdfSelection | null // the passage a question is about
   created_at: number
@@ -40,6 +64,8 @@ export type StreamEvent =
   | { type: 'started' }
   | { type: 'text'; text: string }
   | ({ type: 'tool' } & ToolCall)
+  | { type: 'step'; index: number; step: TraceStep } // a new or updated trace step
+  | { type: 'step_delta'; index: number; text: string } // more text for a text or thinking step
   | { type: 'pdf' } // the paper was downloaded from a link in the message
   | { type: 'done'; message: Message }
 

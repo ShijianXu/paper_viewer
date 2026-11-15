@@ -1,6 +1,6 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import { api, type HighlightColor, type Material, type Message, type PdfSelection, type Session, type ToolCall, type UserHighlight } from './api'
+import { api, type HighlightColor, type Material, type Message, type PdfSelection, type Session, type ToolCall, type TraceStep, type UserHighlight } from './api'
 import {
   buildPageIndex,
   citeHue,
@@ -15,7 +15,7 @@ import MessageView from './MessageView'
 import PdfPane, { type AskMark, type ShownHighlight } from './PdfPane'
 import './App.css'
 
-type Draft = { text: string; tools: ToolCall[] }
+type Draft = { text: string; tools: ToolCall[]; trace: TraceStep[] }
 
 const EXAMPLES = [
   'Summarize this paper and explain the main method.',
@@ -219,11 +219,26 @@ export default function App() {
       const sid = id
       const now = Date.now() / 1000
       setMessages((m) => [...m, { id: -2, role: 'user', text, tools: [], error: null, selection, created_at: now }])
-      setDraft({ text: '', tools: [] })
+      setDraft({ text: '', tools: [], trace: [] })
       await api.sendMessage(sid, text, selection, (ev) => {
         if (currentIdRef.current !== sid) return
         if (ev.type === 'text') setDraft((d) => d && { ...d, text: d.text + ev.text })
         else if (ev.type === 'tool') setDraft((d) => d && { ...d, tools: [...d.tools, { name: ev.name, summary: ev.summary }] })
+        else if (ev.type === 'step')
+          setDraft((d) => {
+            if (!d) return d
+            const trace = d.trace.slice()
+            trace[ev.index] = { ...ev.step }
+            return { ...d, trace }
+          })
+        else if (ev.type === 'step_delta')
+          setDraft((d) => {
+            const step = d?.trace[ev.index]
+            if (!d || !step || (step.type !== 'text' && step.type !== 'thinking')) return d
+            const trace = d.trace.slice()
+            trace[ev.index] = { ...step, text: step.text + ev.text }
+            return { ...d, trace }
+          })
         else if (ev.type === 'pdf') {
           loadSession(sid).catch(() => {})
           refreshSessions()

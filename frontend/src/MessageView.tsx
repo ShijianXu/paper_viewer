@@ -4,12 +4,12 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
-import type { Message, PdfSelection, ToolCall } from './api'
+import type { Message, PdfSelection, ToolCall, TraceStep } from './api'
 import { citationsToMarkdown, parseCitations, type Citation } from './citations'
 import { MediaFile, MermaidDiagram, PlotlyChart, mediaUrl } from './Media'
 
 type Props = {
-  message: Pick<Message, 'id' | 'role' | 'text' | 'tools' | 'error'> & { selection?: PdfSelection | null }
+  message: Pick<Message, 'id' | 'role' | 'text' | 'tools' | 'trace' | 'error'> & { selection?: PdfSelection | null }
   streaming?: boolean
   hue?: number // highlight color of this answer's quotes
   active?: boolean
@@ -95,7 +95,11 @@ function MessageView({ message, streaming, hue, active, found, onCite, onShowSel
 
   return (
     <div className={`msg assistant${active ? ' active' : ''}`} style={hue === undefined ? undefined : ({ '--h': hue } as CSSProperties)}>
-      {message.tools.length > 0 && <Tools tools={message.tools} running={streaming} />}
+      {message.trace?.length ? (
+        <Trace trace={message.trace} running={streaming} />
+      ) : (
+        message.tools.length > 0 && <Tools tools={message.tools} running={streaming} />
+      )}
       {markdown && (
         <div className="markdown">
           <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={components}>
@@ -172,5 +176,146 @@ function Tools({ tools, running }: { tools: ToolCall[]; running?: boolean }) {
     </details>
   )
 }
+
+type ToolStep = Extract<TraceStep, { type: 'tool' }>
+type ResultStep = Extract<TraceStep, { type: 'result' }>
+type ByParent = Map<string | null, TraceStep[]>
+
+/** Every step of an answer in order: text, thinking, tool calls with input and output, subagents. */
+function Trace({ trace, running }: { trace: TraceStep[]; running?: boolean }) {
+  const steps = trace.filter(Boolean) // a streamed trace can have a hole for a moment
+  const byParent: ByParent = new Map()
+  for (const s of steps) {
+    if (s.type === 'result') continue
+    const key = s.parent ?? null
+    byParent.set(key, [...(byParent.get(key) ?? []), s])
+  }
+  const result = steps.find((s): s is ResultStep => s.type === 'result')
+  const tools = steps.filter((s): s is ToolStep => s.type === 'tool')
+  const failed = tools.filter((t) => t.is_error).length
+
+  let label: string
+  if (running) {
+    const last = [...steps].reverse().find((s) => s.type !== 'result')
+    label =
+      last?.type === 'tool'
+        ? `${last.name}${last.summary ? `: ${last.summary}` : ''}`
+        : last?.type === 'thinking'
+          ? 'Thinking…'
+          : 'Writing…'
+  } else {
+    label = [
+      `${tools.length} tool call${tools.length === 1 ? '' : 's'}`,
+      failed ? `${failed} failed` : '',
+      result?.duration_ms != null ? formatDuration(result.duration_ms) : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+  }
+
+  return (
+    <details className="trace">
+      <summary>{label}</summary>
+      <div className="trace-body">
+        <Steps steps={byParent.get(null) ?? []} byParent={byParent} />
+        {result && <ResultLine result={result} />}
+      </div>
+    </details>
+  )
+}
+
+function Steps({ steps, byParent }: { steps: TraceStep[]; byParent: ByParent }) {
+  return (
+    <ol className="steps">
+      {steps.map((s, i) => (
+        <li key={i}>
+          <Step step={s} byParent={byParent} />
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+function Step({ step, byParent }: { step: TraceStep; byParent: ByParent }) {
+  if (step.type === 'text') return step.text.trim() ? <div className="step-text">{step.text.trim()}</div> : null
+  if (step.type === 'thinking') {
+    // Claude Code usually sends no thinking text in print mode, only that Claude thought.
+    if (!step.text.trim()) return <div className="step-thinking">Thinking</div>
+    return (
+      <details className="step-thinking">
+        <summary>Thinking</summary>
+        <div className="step-text">{step.text.trim()}</div>
+      </details>
+    )
+  }
+  if (step.type !== 'tool') return null
+  const status = step.result === null ? 'running' : step.is_error ? 'error' : 'ok'
+  const sub = step.id ? byParent.get(step.id) : undefined
+  return (
+    <details className={`step-tool ${status}`}>
+      <summary>
+        <span className="step-dot" title={status} />
+        <b>{step.name}</b> {step.summary && <code>{step.summary}</code>}
+      </summary>
+      <div className="step-detail">
+        {Object.keys(step.input).length > 0 && (
+          <>
+            <div className="step-label">Input</div>
+            <ToolInput input={step.input} />
+          </>
+        )}
+        {sub && sub.length > 0 && (
+          <>
+            <div className="step-label">Subagent</div>
+            <Steps steps={sub} byParent={byParent} />
+          </>
+        )}
+        <div className={`step-label${step.is_error ? ' error' : ''}`}>{step.is_error ? 'Error' : 'Output'}</div>
+        {step.result === null ? (
+          <div className="step-pending">running…</div>
+        ) : (
+          <pre className="step-pre">{step.result || '(no output)'}</pre>
+        )}
+      </div>
+    </details>
+  )
+}
+
+/** Tool input as key / value rows; strings are shown as they are (commands, file contents), not JSON-escaped. */
+function ToolInput({ input }: { input: Record<string, unknown> }) {
+  return (
+    <dl className="step-input">
+      {Object.entries(input).map(([k, v]) => (
+        <div key={k}>
+          <dt>{k}</dt>
+          <dd>
+            <pre className="step-pre">{typeof v === 'string' ? v : JSON.stringify(v, null, 2)}</pre>
+          </dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+function ResultLine({ result }: { result: ResultStep }) {
+  const u = result.usage ?? {}
+  const input = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+  const parts = [
+    result.model,
+    result.num_turns != null ? `${result.num_turns} turn${result.num_turns === 1 ? '' : 's'}` : '',
+    result.duration_ms != null ? formatDuration(result.duration_ms) : '',
+    input || u.output_tokens ? `${formatTokens(input)} in / ${formatTokens(u.output_tokens ?? 0)} out tokens` : '',
+    result.cost_usd != null ? `$${result.cost_usd.toFixed(result.cost_usd < 0.1 ? 3 : 2)}` : '',
+    result.is_error ? 'ended with an error' : '',
+  ].filter(Boolean)
+  return <div className="trace-result">{parts.join(' · ')}</div>
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`
+  return `${Math.floor(ms / 60_000)} min ${Math.round((ms % 60_000) / 1000)} s`
+}
+
+const formatTokens = (n: number) => (n < 1000 ? String(n) : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`)
 
 export default memo(MessageView)

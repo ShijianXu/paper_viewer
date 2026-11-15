@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS messages (
     tools       TEXT NOT NULL DEFAULT '[]',  -- JSON list of tool calls shown under the message
     error       TEXT,
     selection   TEXT,                        -- JSON {page, ranges, text}: PDF passage the question is about
+    trace       TEXT,                        -- JSON list of the steps of an answer (see claude_runner)
     created_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, id);
@@ -66,7 +67,7 @@ def connect():
 
 
 # Columns added after the first release: (table, column, definition).
-MIGRATIONS = [("messages", "selection", "TEXT")]
+MIGRATIONS = [("messages", "selection", "TEXT"), ("messages", "trace", "TEXT")]
 
 
 def init() -> None:
@@ -90,6 +91,7 @@ def _message(row: sqlite3.Row) -> dict:
     d = dict(row)
     d["tools"] = json.loads(d["tools"])
     d["selection"] = json.loads(d["selection"]) if d["selection"] else None
+    d["trace"] = json.loads(d["trace"]) if d.get("trace") else None
     return d
 
 
@@ -239,14 +241,16 @@ def add_message(
     tools: list | None = None,
     error: str | None = None,
     selection: dict | None = None,
+    trace: list | None = None,
 ) -> dict:
     with connect() as c:
         cur = c.execute(
-            "INSERT INTO messages (session_id, role, text, tools, error, selection, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO messages (session_id, role, text, tools, error, selection, trace, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session_id, role, text, json.dumps(tools or []), error,
-                json.dumps(selection) if selection else None, time.time(),
+                json.dumps(selection) if selection else None,
+                json.dumps(trace) if trace else None, time.time(),
             ),
         )
         row = c.execute("SELECT * FROM messages WHERE id = ?", (cur.lastrowid,)).fetchone()

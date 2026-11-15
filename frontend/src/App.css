@@ -170,6 +170,34 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
 .tools ul { margin: 4px 0; padding-left: 18px; }
 .tools code { font-size: 12px; overflow-wrap: anywhere; }
 
+/* Trace: every step of an answer. */
+.trace { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.trace > summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-body { margin: 6px 0 4px; padding-left: 10px; border-left: 2px solid var(--border); }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.step-text { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); opacity: 0.8; max-height: 12em; overflow-y: auto; }
+.step-thinking { font-style: italic; }
+.step-thinking > summary { cursor: pointer; }
+.step-thinking .step-text { font-style: normal; margin: 4px 0 0 14px; }
+.step-tool > summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.step-tool code { font-size: 12px; }
+.step-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: middle; background: #3a9a5b; }
+.step-tool.running .step-dot { background: var(--muted); animation: step-pulse 1s ease-in-out infinite; }
+.step-tool.error .step-dot { background: var(--danger); }
+@keyframes step-pulse { 50% { opacity: 0.3; } }
+.step-detail { margin: 4px 0 6px 13px; padding-left: 10px; border-left: 1px dashed var(--border); }
+.step-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; margin: 6px 0 2px; }
+.step-label.error { color: var(--danger); }
+.step-pre {
+  margin: 0; padding: 6px 8px; border-radius: 6px; background: var(--code-bg); color: var(--fg);
+  font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20em; overflow-y: auto;
+}
+.step-input { margin: 0; display: flex; flex-direction: column; gap: 3px; }
+.step-input dt { font-size: 11px; font-family: monospace; }
+.step-input dd { margin: 0; }
+.step-pending { font-style: italic; }
+.trace-result { margin-top: 6px; font-size: 12px; }
+
 .markdown { overflow-wrap: anywhere; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
