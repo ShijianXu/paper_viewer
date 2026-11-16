@@ -1,6 +1,7 @@
 """SQLite storage for sessions and messages."""
 
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -260,3 +261,60 @@ def add_message(
         row = c.execute("SELECT * FROM messages WHERE id = ?", (cur.lastrowid,)).fetchone()
     update_session(session_id)
     return _message(row)
+
+
+# Where a search term can be found: (label, SQL giving (session_id, text) rows matching `LIKE ?`).
+# The label names the best match shown in the sidebar; earlier sources win.
+_SEARCH_SOURCES = [
+    ("title", "SELECT id, title FROM sessions WHERE title LIKE ? ESCAPE '\\'"),
+    ("file", "SELECT id, pdf_filename FROM sessions WHERE pdf_filename LIKE ? ESCAPE '\\'"),
+    ("highlight", "SELECT session_id, text FROM highlights WHERE text LIKE ? ESCAPE '\\'"),
+    ("material", "SELECT session_id, filename FROM materials WHERE removed = 0 AND filename LIKE ? ESCAPE '\\'"),
+    ("question", "SELECT session_id, text FROM messages WHERE role = 'user' AND text LIKE ? ESCAPE '\\'"),
+    ("answer", "SELECT session_id, text FROM messages WHERE role = 'assistant' AND text LIKE ? ESCAPE '\\'"),
+]
+
+
+def _snippet(text: str, term: str, width: int = 120) -> str:
+    """The part of `text` around the first occurrence of `term`, on one line."""
+    text = " ".join(re.sub(r"</?cite[^>]*>", "", text).split())
+    i = text.lower().find(term.lower())
+    if i < 0:
+        return text[:width]
+    start = max(0, i - width // 3)
+    end = min(len(text), start + width)
+    return ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+
+
+def search_sessions(query: str, limit: int = 100) -> list[dict]:
+    """Sessions in which every word of `query` occurs somewhere (title, file name,
+    highlights, materials, questions or answers; case-insensitive for ASCII).
+    Newest first; each with where the first word was found and a snippet."""
+    terms = query.split()[:8]
+    if not terms:
+        return []
+    found: list[dict[str, tuple[str, str]]] = []  # per term: session id -> (label, text)
+    with connect() as c:
+        for term in terms:
+            pattern = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            hits: dict[str, tuple[str, str]] = {}
+            for label, sql in _SEARCH_SOURCES:
+                for sid, text in c.execute(sql, (pattern,)):
+                    hits.setdefault(sid, (label, text))
+            found.append(hits)
+            if not hits:
+                return []
+        ids = set.intersection(*(set(h) for h in found))
+        rows = c.execute(
+            f"SELECT * FROM sessions WHERE id IN ({','.join('?' * len(ids))}) ORDER BY updated_at DESC LIMIT ?",
+            (*ids, limit),
+        ).fetchall() if ids else []
+    results = []
+    for row in rows:
+        # Show the match that is not just the title, if any: that is what the user can't see.
+        label, text, term = next(
+            ((h[row["id"]][0], h[row["id"]][1], t) for t, h in zip(terms, found) if h[row["id"]][0] != "title"),
+            (*found[0][row["id"]], terms[0]),
+        )
+        results.append(_session(row) | {"match": {"where": label, "snippet": _snippet(text, term)}})
+    return results

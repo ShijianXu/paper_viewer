@@ -38,6 +38,12 @@ def list_sessions() -> list[dict]:
     return [s | {"running": claude_runner.is_running(s["id"])} for s in db.list_sessions()]
 
 
+@app.get("/api/sessions/search")
+def search_sessions(q: str = "") -> list[dict]:
+    """Sessions matching every word of q in their title, paper, highlights, materials or chat."""
+    return [s | {"running": claude_runner.is_running(s["id"])} for s in db.search_sessions(q[:500])]
+
+
 @app.post("/api/sessions")
 def create_session() -> dict:
     session = db.create_session()

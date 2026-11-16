@@ -8,6 +8,13 @@ export type Session = {
   updated_at: number
 }
 
+/** A search hit: where in the session the query was found, with the text around it. */
+export type SearchMatch = {
+  where: 'title' | 'file' | 'highlight' | 'material' | 'question' | 'answer'
+  snippet: string
+}
+export type SessionHit = Session & { match: SearchMatch }
+
 export type ToolCall = { name: string; summary: string }
 
 /** One step of an answer, in order. parent: the Task tool call a subagent step belongs to. */
@@ -92,6 +99,8 @@ const json = (method: string, body: unknown): RequestInit => ({
 
 export const api = {
   listSessions: () => request<Session[]>('/sessions'),
+  searchSessions: (q: string, signal?: AbortSignal) =>
+    request<SessionHit[]>(`/sessions/search?q=${encodeURIComponent(q)}`, { signal }),
   createSession: () => request<Session>('/sessions', { method: 'POST' }),
   getSession: (id: string) =>
     request<{ session: Session; messages: Message[]; highlights: UserHighlight[]; materials: Material[] }>(

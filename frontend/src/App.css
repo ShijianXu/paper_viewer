@@ -100,6 +100,31 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
   cursor: pointer;
   font-size: 14px;
 }
+.session-search { padding: 0 12px 8px; }
+.session-search input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+}
+.session-search input:focus { outline: none; border-color: var(--accent); }
+.session-item { flex-wrap: wrap; }
+.session-match {
+  flex-basis: 100%;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.session-match-where { font-weight: 600; }
+.session-list mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; border-radius: 2px; }
 .session-item:hover { background: var(--bg-sunken); }
 .session-item.current { background: var(--bg-sunken); font-weight: 600; }
 .session-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

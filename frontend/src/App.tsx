@@ -1,6 +1,6 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import { api, type HighlightColor, type Material, type Message, type PdfSelection, type Session, type ToolCall, type TraceStep, type UserHighlight } from './api'
+import { api, type HighlightColor, type Material, type Message, type PdfSelection, type Session, type SessionHit, type ToolCall, type TraceStep, type UserHighlight } from './api'
 import {
   buildPageIndex,
   citeHue,
@@ -52,6 +52,42 @@ export default function App() {
   const createdHere = useRef<string | null>(null) // session just created by send/openPdf: keep its state
 
   const refreshSessions = useCallback(() => api.listSessions().then(setSessions).catch(() => {}), [])
+
+  // Searching sessions: titles are filtered at once, the server also looks in the chats etc.
+  const [query, setQuery] = useState('')
+  const [hits, setHits] = useState<SessionHit[] | null>(null) // server results for `query`
+  const searchRef = useRef<HTMLInputElement>(null)
+  const terms = useMemo(() => query.toLowerCase().split(/\s+/).filter(Boolean), [query])
+  useEffect(() => {
+    if (!terms.length) return setHits(null)
+    const ctrl = new AbortController()
+    const timer = setTimeout(
+      () => api.searchSessions(terms.join(' '), ctrl.signal).then(setHits).catch(() => {}),
+      200,
+    )
+    return () => (clearTimeout(timer), ctrl.abort())
+  }, [terms, sessions]) // sessions: search again after a rename, a delete, a new answer
+  // Until the server answers, show the sessions whose title or file name matches.
+  const shownSessions: (Session & { match?: SessionHit['match'] })[] = useMemo(() => {
+    if (!terms.length) return sessions
+    if (hits) return hits
+    return sessions.filter((s) => {
+      const hay = `${s.title} ${s.pdf_filename ?? ''}`.toLowerCase()
+      return terms.every((t) => hay.includes(t))
+    })
+  }, [terms, hits, sessions])
+  // Ctrl/Cmd+K: search sessions.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSidebarOpen(true)
+        requestAnimationFrame(() => searchRef.current?.select())
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const loadSession = useCallback(async (id: string) => {
     const data = await api.getSession(id)
@@ -360,9 +396,26 @@ export default function App() {
               «
             </button>
           </div>
+          <div className="session-search">
+            <input
+              ref={searchRef}
+              type="search"
+              value={query}
+              placeholder="Search sessions (Ctrl+K)"
+              aria-label="Search sessions"
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setQuery('')
+                else if (e.key === 'Enter' && shownSessions[0]) selectSession(shownSessions[0].id)
+              }}
+            />
+          </div>
           <nav className="session-list">
             {sessions.length === 0 && <p className="muted small">No sessions yet.</p>}
-            {sessions.map((s) => (
+            {sessions.length > 0 && terms.length > 0 && shownSessions.length === 0 && (
+              <p className="muted small">{hits ? 'No matching sessions.' : 'Searching…'}</p>
+            )}
+            {shownSessions.map((s) => (
               <div
                 key={s.id}
                 className={`session-item${s.id === currentId ? ' current' : ''}`}
@@ -372,7 +425,7 @@ export default function App() {
               >
                 <span className="session-title">
                   {s.has_pdf ? '📄 ' : ''}
-                  {s.title}
+                  <Marked text={s.title} terms={terms} />
                 </span>
                 {s.running && <span className="dot" title="Claude is answering" />}
                 <span className="session-actions">
@@ -383,6 +436,12 @@ export default function App() {
                     🗑
                   </button>
                 </span>
+                {s.match && s.match.where !== 'title' && (
+                  <span className="session-match">
+                    <span className="session-match-where">{MATCH_LABELS[s.match.where]}</span>{' '}
+                    <Marked text={s.match.snippet} terms={terms} />
+                  </span>
+                )}
               </div>
             ))}
           </nav>
@@ -450,6 +509,23 @@ class ErrorBoundary extends Component<{ fallback: ReactNode; children: ReactNode
 }
 
 const SIDEBAR_WIDTH = { default: 260, min: 180, max: 640 }
+const MATCH_LABELS: Record<SessionHit['match']['where'], string> = {
+  title: 'Title',
+  file: 'File',
+  highlight: 'Highlight',
+  material: 'Material',
+  question: 'You',
+  answer: 'Claude',
+}
+
+/** text with every occurrence of the (lower-case) search terms marked. */
+function Marked({ text, terms }: { text: string; terms: string[] }) {
+  if (!terms.length) return text
+  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const parts = text.split(new RegExp(`(${escaped.join('|')})`, 'gi'))
+  return parts.map((p, i) => (i % 2 ? <mark key={i}>{p}</mark> : p))
+}
+
 const SIDEBAR_WIDTH_KEY = 'paper-viewer.sidebar-width'
 
 function loadSidebarWidth(): number {
