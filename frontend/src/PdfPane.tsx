@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Document, Page, pdfjs } from 'react-pdf'
-import type { PDFDocumentProxy } from 'pdfjs-dist'
 import 'react-pdf/dist/Page/TextLayer.css'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
 import { HIGHLIGHT_COLORS, type HighlightColor, type PdfSelection } from './api'
@@ -8,6 +7,10 @@ import { markItem, type CitationMatch, type ItemMarks } from './citations'
 
 // Must be set in the module that renders react-pdf components.
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
+
+/** Where a pane was in a paper, to come back there: the page at the top of the view, how far
+ * down it (0–1), and the zoom. */
+export type PaneView = { page: number; offset: number; zoom: number }
 
 export type ShownHighlight = { id: number; color: HighlightColor; text: string; match: CitationMatch }
 
@@ -27,7 +30,9 @@ type Props = {
   focus: { key: string; nonce: number } | null
   userHighlights: ShownHighlight[]
   askMark: AskMark | null
-  onDocument: (pdf: PDFDocumentProxy | null) => void
+  view?: PaneView // where to start (the paper was shown before)
+  onView?: (view: PaneView) => void // the user scrolled or zoomed
+  onActivate?: () => void // the user clicked into the pane
   onAsk: (selection: PdfSelection) => void
   onCreateHighlight: (h: PdfSelection, color: HighlightColor) => void
   onRecolorHighlight: (id: number, color: HighlightColor) => void
@@ -50,7 +55,9 @@ export default function PdfPane({
   focus,
   userHighlights,
   askMark,
-  onDocument,
+  view,
+  onView,
+  onActivate,
   onAsk,
   onCreateHighlight,
   onRecolorHighlight,
@@ -60,9 +67,12 @@ export default function PdfPane({
   const barRef = useRef<HTMLDivElement>(null)
   const [numPages, setNumPages] = useState(0)
   const [width, setWidth] = useState(600)
-  const [zoom, setZoom] = useState(1)
-  const [currentPage, setCurrentPage] = useState(1)
+  const [zoom, setZoom] = useState(view?.zoom ?? 1)
+  const [currentPage, setCurrentPage] = useState(view?.page ?? 1)
   const [bar, setBar] = useState<Bar | null>(null)
+  // Where to scroll once the pages are there; not if the pane opens to show a quote or passage.
+  const restore = useRef(focus || askMark?.scroll ? undefined : view)
+  const latestView = useRef<PaneView>(view ?? { page: 1, offset: 0, zoom: 1 })
 
   // Fit pages to the pane width.
   useEffect(() => {
@@ -107,12 +117,42 @@ export default function PdfPane({
     [marksByPage],
   )
 
-  // Scroll to a citation: go to its page, then wait for its <mark> to be rendered.
+  // Come back to where the paper was left: wait for that page to be drawn, then scroll to it.
   useEffect(() => {
-    if (!focus) return
+    const target = restore.current
+    const root = scroller.current
+    if (!numPages || !target || !root) return
+    restore.current = undefined
+    if (target.page <= 1 && target.offset <= 0) return
+    let tries = 0
+    const timer = setInterval(() => {
+      const el = root.querySelector<HTMLElement>(`[data-page="${Math.min(target.page, numPages)}"]`)
+      if (el?.querySelector('canvas') || ++tries > 40) {
+        clearInterval(timer)
+        if (!el) return
+        const r = el.getBoundingClientRect()
+        root.scrollTop += r.top - root.getBoundingClientRect().top + target.offset * r.height
+      }
+    }, 50)
+    return () => clearInterval(timer)
+  }, [numPages])
+
+  // Tell the app the zoom, so the paper comes back at it.
+  useEffect(() => {
+    if (zoom === latestView.current.zoom) return
+    latestView.current = { ...latestView.current, zoom }
+    onView?.(latestView.current)
+  }, [zoom, onView])
+
+  // Scroll to a citation: go to its page, then wait for its <mark> to be rendered. Once per
+  // click (nonce): `matches` changes whenever a paper is indexed, which must not scroll back.
+  const shownFocus = useRef<number | null>(null)
+  useEffect(() => {
+    if (!focus || shownFocus.current === focus.nonce) return
     const match = matches.get(focus.key)
     const root = scroller.current
-    if (!match || !root) return
+    if (!match || !root) return // not found yet: its paper may still be being indexed
+    shownFocus.current = focus.nonce
     root.querySelector(`[data-page="${match.page}"]`)?.scrollIntoView({ block: 'start' })
     let tries = 0
     const timer = setInterval(() => {
@@ -169,16 +209,26 @@ export default function PdfPane({
     }
   }, [bar])
 
-  // Track which page is in view, for the page indicator.
+  // Track which page is in view, for the page indicator, and where the view is, to come back to it.
   const onScroll = () => {
     setBar(null)
     const root = scroller.current
     if (!root) return
-    const mid = root.getBoundingClientRect().top + root.clientHeight / 3
+    const top = root.getBoundingClientRect().top
+    const mid = top + root.clientHeight / 3
     for (const el of root.querySelectorAll<HTMLElement>('[data-page]')) {
       const r = el.getBoundingClientRect()
       if (r.top <= mid && r.bottom >= mid) {
         setCurrentPage(Number(el.dataset.page))
+        break
+      }
+    }
+    if (!onView || restore.current) return // not while it is still going back to the saved place
+    for (const el of root.querySelectorAll<HTMLElement>('[data-page]')) {
+      const r = el.getBoundingClientRect()
+      if (r.bottom > top) {
+        latestView.current = { page: Number(el.dataset.page), offset: Math.max(0, (top - r.top) / r.height), zoom }
+        onView(latestView.current)
         break
       }
     }
@@ -229,7 +279,7 @@ export default function PdfPane({
   }
 
   return (
-    <div className="pdf-pane">
+    <div className="pdf-pane" onPointerDownCapture={onActivate}>
       <div className="pdf-toolbar">
         <span>{numPages ? `Page ${currentPage} / ${numPages}` : 'Loading…'}</span>
         <span className="spacer" />
@@ -241,11 +291,7 @@ export default function PdfPane({
       <div className="pdf-scroller" ref={scroller} onScroll={onScroll} onMouseUp={onMouseUp} onClick={onClick}>
         <Document
           file={url}
-          onLoadSuccess={(pdf) => {
-            setNumPages(pdf.numPages)
-            onDocument(pdf)
-          }}
-          onLoadError={() => onDocument(null)}
+          onLoadSuccess={(pdf) => setNumPages(pdf.numPages)}
           loading={<div className="pdf-message">Loading PDF…</div>}
           error={<div className="pdf-message">Could not load the PDF.</div>}
         >

@@ -17,9 +17,25 @@ type Props = {
   onCite?: (c: Citation) => void
   onShowSelection?: (s: PdfSelection) => void
   sessionId?: string // for images Claude saved in the session folder
+  paperTitles?: Map<number, string> // titles of the session's papers, by number
 }
 
-function MessageView({ message, streaming, hue, active, found, onCite, onShowSelection, sessionId }: Props) {
+/** The short label of a paper in quotes: nothing for the first paper, "P2 · " for paper 2. */
+const paperPrefix = (paper: number | undefined) => (paper && paper !== 1 ? `P${paper} · ` : '')
+
+/** "the PDF" while the session has one paper, else "paper N: title". */
+function paperName(paper: number, titles: Map<number, string> | undefined): string {
+  if (paper === 1 && (titles?.size ?? 0) <= 1) return 'the PDF'
+  const title = titles?.get(paper)
+  return `paper ${paper}${title ? `: ${title}` : ''}`
+}
+
+function citeTooltip(paper: number, titles: Map<number, string> | undefined, missing: boolean): string {
+  if (!missing) return `Show in ${paperName(paper, titles)}`
+  return titles?.has(paper) || paper === 1 ? 'This quote was not found in the PDF' : `Paper ${paper} is not open in this session`
+}
+
+function MessageView({ message, streaming, hue, active, found, onCite, onShowSelection, sessionId, paperTitles }: Props) {
   const { markdown, citations } = useMemo(
     () => parseCitations(message.text, message.id, streaming),
     [message.text, message.id, streaming],
@@ -37,11 +53,11 @@ function MessageView({ message, streaming, hue, active, found, onCite, onShowSel
               role="button"
               tabIndex={0}
               className={`cite${ok === false ? ' missing' : ''}`}
-              title={ok === false ? 'This quote was not found in the PDF' : 'Show in the PDF'}
+              title={citeTooltip(c.paper, paperTitles, ok === false)}
               onClick={() => onCite?.(c)}
               onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onCite?.(c))}
             >
-              “{children}”<sup>p.{c.page}</sup>
+              “{children}”<sup>{paperPrefix(c.paper)}p.{c.page}</sup>
             </span>
           )
         }
@@ -70,7 +86,7 @@ function MessageView({ message, streaming, hue, active, found, onCite, onShowSel
         return <pre>{children}</pre>
       },
     }),
-    [citations, found, onCite, sessionId, message.id, streaming],
+    [citations, found, onCite, sessionId, message.id, streaming, paperTitles],
   )
 
   if (message.role === 'user') {
@@ -81,9 +97,11 @@ function MessageView({ message, streaming, hue, active, found, onCite, onShowSel
             <button
               className="quoted"
               onClick={() => onShowSelection?.(message.selection!)}
-              title="Show this passage in the PDF"
+              title={`Show this passage in ${paperName(message.selection.paper ?? 1, paperTitles)}`}
             >
-              <span className="quoted-page">p.{message.selection.page}</span>
+              <span className="quoted-page">
+                {paperPrefix(message.selection.paper)}p.{message.selection.page}
+              </span>
               <span className="quoted-text">“{message.selection.text}”</span>
             </button>
           )}

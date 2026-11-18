@@ -22,6 +22,7 @@ HOOK_SCRIPT = Path(__file__).resolve().parent / "hooks" / "check_paths.py"
 PDF_NAME = "paper.pdf"
 MATERIALS_DIR = "materials"  # extra files for Claude, inside the session folder
 ATTACHMENTS_DIR = "attachments"  # images pasted into a message, inside the session folder
+EXTRA_PAPERS_DIR = "papers"  # papers opened next to the first one, inside the session folder
 # Width (CSS px) at which web pages are laid out and saved as PDF.
 WEBPAGE_WIDTH = int(os.environ.get("PAPER_VIEWER_WEBPAGE_WIDTH", "1000"))
 MAX_MATERIAL_BYTES = int(os.environ.get("PAPER_VIEWER_MAX_MATERIAL_MB", "50")) * 1024 * 1024
@@ -38,5 +39,6 @@ def session_dir(session_id: str) -> Path:
     return PAPERS_DIR / session_id
 
 
-def original_pdf(session_id: str) -> Path:
-    return ORIGINALS_DIR / f"{session_id}.pdf"
+def original_pdf(session_id: str, num: int = 1) -> Path:
+    """Untouched copy of the session's paper `num` (1: the first paper, 2, 3, ...: papers added next to it)."""
+    return ORIGINALS_DIR / (f"{session_id}.pdf" if num == 1 else f"{session_id}-{num}.pdf")

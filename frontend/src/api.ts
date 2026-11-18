@@ -2,6 +2,7 @@ export type Session = {
   id: string
   title: string
   pdf_filename: string | null
+  pdf_title?: string | null // missing for papers opened before titles were kept
   has_pdf: boolean
   running?: boolean
   created_at: number
@@ -40,8 +41,12 @@ export type TraceStep =
       is_error: boolean
     }
 
-/** A passage of the PDF; ranges: [itemIndex, start, end] in the page's text items. */
+/** A paper shown in the viewer. num: 1 for the session's first paper (paper.pdf), 2, 3, … for papers opened next to it. */
+export type Paper = { num: number; title: string; filename: string }
+
+/** A passage of a PDF; ranges: [itemIndex, start, end] in the page's text items. paper: 1 if missing. */
 export type PdfSelection = {
+  paper?: number
   page: number
   ranges: [number, number, number][]
   text: string
@@ -103,7 +108,7 @@ export const api = {
     request<SessionHit[]>(`/sessions/search?q=${encodeURIComponent(q)}`, { signal }),
   createSession: () => request<Session>('/sessions', { method: 'POST' }),
   getSession: (id: string) =>
-    request<{ session: Session; messages: Message[]; highlights: UserHighlight[]; materials: Material[] }>(
+    request<{ session: Session; messages: Message[]; highlights: UserHighlight[]; materials: Material[]; papers: Paper[] }>(
       `/sessions/${id}`,
     ),
   addHighlight: (id: string, h: Omit<UserHighlight, 'id'>) =>
@@ -116,6 +121,18 @@ export const api = {
   deleteSession: (id: string) => request<{ ok: boolean }>(`/sessions/${id}`, { method: 'DELETE' }),
   stop: (id: string) => request<{ stopped: boolean }>(`/sessions/${id}/stop`, { method: 'POST' }),
   pdfUrl: (id: string) => `/api/sessions/${id}/pdf`,
+  paperUrl: (id: string, num: number) => (num === 1 ? `/api/sessions/${id}/pdf` : `/api/sessions/${id}/papers/${num}/pdf`),
+
+  /** Open another paper next to the session's first one. */
+  addPaper(id: string, file: File) {
+    const form = new FormData()
+    form.append('file', file)
+    return request<Paper>(`/sessions/${id}/papers`, { method: 'POST', body: form })
+  },
+  addPaperFromLink: (id: string, url: string) => request<Paper>(`/sessions/${id}/papers/link`, json('POST', { url })),
+  removePaper: (id: string, num: number) => request<{ ok: boolean }>(`/sessions/${id}/papers/${num}`, { method: 'DELETE' }),
+  openMaterialAsPaper: (id: string, materialId: number) =>
+    request<Paper>(`/sessions/${id}/materials/${materialId}/open`, { method: 'POST' }),
 
   addMaterials(id: string, files: File[]) {
     const form = new FormData()

@@ -24,10 +24,15 @@ You are the assistant inside Paper Viewer, a local app where the user reads a re
 ## The paper
 When a paper is open it is saved as ./paper.pdf in your working directory. Read it with the Read tool, or with shell tools such as `pdftotext -layout paper.pdf -` if they are available.
 
+## Several papers
+The user can open more papers next to the first one, to compare them or look things up across them; you are told when they do. They are numbered: paper 1 is ./paper.pdf, papers 2, 3, ... are in ./papers/ (you are told each one's file name). All of them are shown in the app and can be cited (see below). They are read-only.
+
 ## Citing the paper (important)
 Whenever a statement in your answer is supported by a specific passage of the paper, quote that passage in exactly this form:
 
 <cite page="4">exact words copied from the paper</cite>
+
+For papers 2, 3, ... (see "Several papers") add the paper's number: <cite paper="2" page="4">exact words copied from paper 2</cite>. Without `paper`, the quote is from paper 1 (./paper.pdf).
 
 - `page` is the 1-based page index in the PDF file (the first page of the file is 1), not the page number printed on the page.
 - The quote must be copied verbatim from the paper: same words, same order. Keep it short: one sentence or a clause, at most about 30 words. Do not paraphrase inside the tag, do not join text from different places, and do not quote equations, tables or figure contents (quote the sentence around them instead).
@@ -35,7 +40,7 @@ Whenever a statement in your answer is supported by a specific passage of the pa
 - Cite generously when you discuss the paper's content, but never invent a quote. Never put cite tags inside code blocks or headings.
 
 ## Additional materials
-The user may add supplementary files (other papers, notes, images, data, ...) in ./materials/. You are told when files are added or removed. Use them as complementary information. Cite tags are only for paper.pdf: when you use a material, name the file instead (e.g. "according to materials/notes.txt, ..."). The files are read-only.
+The user may add supplementary files (other papers, notes, images, data, ...) in ./materials/. You are told when files are added or removed. Use them as complementary information. Cite tags are only for the numbered papers: when you use a material, name the file instead (e.g. "according to materials/notes.txt, ..."). The files are read-only.
 
 ## Pasted images
 The user can paste images (screenshots, crops of figures or equations, ...) into a message. They are saved in ./attachments/ and the message lists them. Look at them with the Read tool. They stay there, so you can look at an earlier one again if a later question refers to it. They are read-only.
@@ -120,6 +125,28 @@ def _announce_materials(session_id: str) -> tuple[str, list[int]]:
     return note, [m["id"] for m in new + gone]
 
 
+def _announce_papers(session_id: str) -> tuple[str, list[int]]:
+    """A note about papers opened or closed next to the first one since Claude last heard, and their ids."""
+    papers_ = db.list_papers(session_id, include_removed=True)
+    new = [p for p in papers_ if p["state"] == "new"]
+    gone = [p for p in papers_ if p["state"] == "removed"]
+    note = ""
+    if new:
+        lines = "\n".join(
+            f'- paper {p["num"]}: "{p["title"]}", saved as ./{config.EXTRA_PAPERS_DIR}/{p["filename"]}; '
+            f'cite it with <cite paper="{p["num"]}" page="N">' for p in new
+        )
+        note += (
+            "[The user opened more papers next to the first one (paper 1, ./paper.pdf); the app shows them side by side:\n"
+            f"{lines}\n"
+            "Read them before answering, at least enough to know what each is about.]\n\n"
+        )
+    if gone:
+        names = ", ".join(f'paper {p["num"]} ("{p["title"]}")' for p in gone)
+        note += f"[The user closed {names}. It is no longer available; don't cite it any more.]\n\n"
+    return note, [p["id"] for p in new + gone]
+
+
 def _user_turn(text: str, selection: dict | None, images: list[str] | None = None) -> str:
     """The user's question, preceded by the images and PDF passage it is about (if any)."""
     prefix = ""
@@ -134,7 +161,9 @@ def _user_turn(text: str, selection: dict | None, images: list[str] | None = Non
             text = "(No text: the user sent only the image(s). Work out what they want from the image and the context.)"
     if selection:
         quoted = "\n".join(f"> {line}" for line in selection["text"].splitlines())
-        prefix += f"[The user selected this passage on page {selection['page']} of the paper and asks about it:]\n{quoted}\n\n"
+        paper = selection.get("paper") or 1
+        which = "the paper" if paper == 1 else f"paper {paper}"
+        prefix += f"[The user selected this passage on page {selection['page']} of {which} and asks about it:]\n{quoted}\n\n"
     return prefix + text
 
 
@@ -238,7 +267,8 @@ async def _turn(run: Run, user_text: str, selection: dict | None, images: list[s
                 return
         prefix = notes + ("" if session["pdf_announced"] or not session["has_pdf"] else _announce_pdf(session))
         materials_note, material_ids = _announce_materials(sid)
-        prefix += materials_note
+        papers_note, paper_ids = _announce_papers(sid)
+        prefix += papers_note + materials_note
 
         if session["claude_session_id"]:
             ok, error = await _invoke(run, prefix + question, state, resume=session["claude_session_id"])
@@ -247,12 +277,15 @@ async def _turn(run: Run, user_text: str, selection: dict | None, images: list[s
                 error = None
                 history = db.list_messages(sid)[:-1]
                 db.reset_materials_announced(sid)
+                db.reset_papers_announced(sid)
                 materials_note, material_ids = _announce_materials(sid)
+                papers_note, paper_ids = _announce_papers(sid)
                 prompt = (
                     "[This continues an earlier conversation whose history was lost. "
                     "Here is the saved transcript:]\n\n"
                     f"{_transcript(history)}\n\n[End of transcript. The user's new message follows.]\n\n"
                     + (_announce_pdf(session) if session["has_pdf"] else "")
+                    + papers_note
                     + materials_note
                     + question
                 )
@@ -264,6 +297,7 @@ async def _turn(run: Run, user_text: str, selection: dict | None, images: list[s
             db.update_session(sid, pdf_announced=1)
         if ok:
             db.materials_announced(sid, material_ids)
+            db.papers_announced(sid, paper_ids)
     except Exception as e:  # keep the run alive enough to report and save
         log.exception("turn failed")
         error = f"{type(e).__name__}: {e}"
@@ -349,6 +383,7 @@ async def _invoke(run: Run, prompt: str, state: dict, *, resume: str | None = No
         cmd += ["--session-id", new_id]
         db.update_session(run.session_id, claude_session_id=new_id, pdf_announced=0)
         db.reset_materials_announced(run.session_id)
+        db.reset_papers_announced(run.session_id)
 
     run.proc = proc = await asyncio.create_subprocess_exec(
         *cmd,

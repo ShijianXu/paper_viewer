@@ -1,5 +1,6 @@
 """Storing a session's paper, and downloading papers from links."""
 
+import asyncio
 import hashlib
 import html
 import logging
@@ -8,6 +9,7 @@ import re
 import shutil
 import stat
 import tempfile
+import threading
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
@@ -46,21 +48,48 @@ def protect_pdf(session_id: str) -> None:
     os.chmod(pdf, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
 
 
+def _restore_copy(pdf: Path, backup: Path, expected_sha256: str) -> None:
+    """Put back `pdf` from `backup` if it no longer has the expected content."""
+    if pdf.is_file() and not pdf.is_symlink() and sha256(pdf) == expected_sha256:
+        return
+    log.warning("%s changed; restoring it", pdf)
+    _clear(pdf)
+    shutil.copyfile(backup, pdf)
+    os.chmod(pdf, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+
+
+def _clear(path: Path) -> None:
+    """Remove whatever is at `path` (a file, a symlink, a folder) without following links."""
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        for p in [path, *path.rglob("*")]:
+            if not p.is_symlink():
+                p.chmod(p.stat().st_mode | 0o200)
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+
+
+def _papers_folder(session_id: str) -> Path:
+    """The session's papers/ folder, a real folder inside the session (Claude might have replaced it)."""
+    folder = config.session_dir(session_id) / config.EXTRA_PAPERS_DIR
+    if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
+        _clear(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
 def restore_pdf_if_changed(session: dict) -> None:
-    """Put back paper.pdf from the backup if Claude changed or removed it."""
-    if not session["has_pdf"]:
-        return
-    pdf = config.session_dir(session["id"]) / config.PDF_NAME
-    if pdf.is_file() and sha256(pdf) == session["pdf_sha256"]:
-        return
-    log.warning("paper.pdf of session %s changed; restoring it", session["id"])
-    if pdf.exists() or pdf.is_symlink():
-        if pdf.is_dir():
-            shutil.rmtree(pdf)
-        else:
-            pdf.unlink()
-    shutil.copyfile(config.original_pdf(session["id"]), pdf)
-    protect_pdf(session["id"])
+    """Put back paper.pdf, and the papers in papers/, from the backups if Claude changed or removed them."""
+    sid = session["id"]
+    if session["has_pdf"]:
+        _restore_copy(config.session_dir(sid) / config.PDF_NAME, config.original_pdf(sid), session["pdf_sha256"])
+    extra = [p for p in db.list_papers(sid) if config.original_pdf(sid, p["num"]).is_file()]
+    if extra:
+        folder = _papers_folder(sid)
+        for p in extra:
+            _restore_copy(folder / p["filename"], config.original_pdf(sid, p["num"]), p["sha256"])
 
 
 def paper_title(pdf: Path, filename: str) -> str:
@@ -116,11 +145,51 @@ def store_pdf(session_id: str, source: Path, filename: str) -> dict:
     shutil.copyfile(backup, folder / config.PDF_NAME)
     protect_pdf(session_id)
 
-    fields = {"pdf_filename": filename, "pdf_sha256": sha256(backup), "pdf_announced": 0}
+    title = paper_title(backup, filename)
+    fields = {"pdf_filename": filename, "pdf_title": title, "pdf_sha256": sha256(backup), "pdf_announced": 0}
     if _has_automatic_title(session):
-        fields["title"] = paper_title(backup, filename)
+        fields["title"] = title
     db.update_session(session_id, **fields)
     return db.get_session(session_id)
+
+
+# ---------------------------------------------------------------- papers next to the first one
+
+
+_adding_paper = threading.Lock()  # two papers added at once must not pick the same file name
+
+
+def add_paper(session_id: str, source: Path, filename: str) -> dict:
+    """Open another paper in the session: a read-only copy in papers/ for Claude, and an
+    untouched backup outside the sandbox that the app shows. Returns the paper (with its num)."""
+    title = paper_title(source, filename)
+    digest = sha256(source)
+    with _adding_paper:
+        folder = _papers_folder(session_id)
+        name = _material_name(folder, filename if filename.lower().endswith(".pdf") else f"{filename}.pdf")
+        dest = folder / name
+        shutil.copyfile(source, dest)
+        os.chmod(dest, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+        paper = db.add_paper(session_id, name, title, digest)
+    shutil.copyfile(source, config.original_pdf(session_id, paper["num"]))
+    return paper
+
+
+def delete_paper_files(session_id: str, paper: dict) -> None:
+    path = config.session_dir(session_id) / config.EXTRA_PAPERS_DIR / paper["filename"]
+    if path.is_file() and not path.is_symlink() and path.parent.resolve() == _papers_folder(session_id).resolve():
+        path.chmod(0o600)
+        path.unlink()
+    config.original_pdf(session_id, paper["num"]).unlink(missing_ok=True)
+
+
+async def fetch_paper(session_id: str, url: str) -> dict:
+    """Download the paper at `url` and add it next to the session's other papers."""
+    with tempfile.TemporaryDirectory(dir=config.DATA_DIR) as tmp:
+        dest = Path(tmp) / "download.pdf"
+        _, filename, _ = await download_paper(url, dest)
+        # Reading the title and hashing a large PDF takes a while: not on the event loop.
+        return await asyncio.to_thread(add_paper, session_id, dest, filename)
 
 
 # ---------------------------------------------------------------- additional materials

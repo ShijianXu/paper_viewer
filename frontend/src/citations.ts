@@ -1,9 +1,11 @@
-// Citations: Claude writes <cite page="N">verbatim quote</cite> in its answers.
+// Citations: Claude writes <cite page="N">verbatim quote</cite> in its answers, or
+// <cite paper="K" page="N"> for a paper opened next to the first one (paper 1).
 // This module parses them out of message text and finds each quote in the PDF's text.
 
 export type Citation = {
   key: string // unique within the session: `${messageId}:${index}`
   messageId: number
+  paper: number // 1: the session's first paper; 2, 3, …: papers opened next to it
   page: number // 1-based, as Claude wrote it
   quote: string
 }
@@ -14,7 +16,15 @@ export type CitationMatch = {
   ranges: Map<number, [number, number][]>
 }
 
-const CITE_RE = /<cite\s+page\s*=\s*["']?(\d+)["']?\s*>([\s\S]*?)<\/cite>/g
+const CITE_RE = /<cite\b([^>]*)>([\s\S]*?)<\/cite>/g
+
+/** page and paper from a cite tag's attributes (in any order); null without a page. */
+function citeAttrs(attrs: string): { page: number; paper: number } | null {
+  const page = /\bpage\s*=\s*["']?(\d+)/.exec(attrs)
+  if (!page) return null
+  const paper = /\bpaper\s*=\s*["']?(\d+)/.exec(attrs)
+  return { page: Number(page[1]), paper: paper ? Number(paper[1]) : 1 }
+}
 
 /** Turn cite tags into Markdown links `[quote](#cite-key)` and collect the citations. */
 export function parseCitations(
@@ -24,18 +34,25 @@ export function parseCitations(
 ): { markdown: string; citations: Citation[] } {
   if (streaming) text = hidePartialCite(text)
   const citations: Citation[] = []
-  const markdown = text.replace(CITE_RE, (_m, page: string, quote: string) => {
+  const markdown = text.replace(CITE_RE, (m, attrs: string, quote: string) => {
+    const where = citeAttrs(attrs)
+    if (!where) return m
     const key = `${messageId}:${citations.length}`
     const q = quote.replace(/\s+/g, ' ').trim()
-    citations.push({ key, messageId, page: Number(page), quote: q })
+    citations.push({ key, messageId, ...where, quote: q })
     return `[${q.replace(/[\\`*_[\]$<>]/g, '\\$&')}](#cite-${key})`
   })
   return { markdown, citations }
 }
 
-/** Plain Markdown for copying: each cite tag becomes `"quote" (p. N)`. */
+/** Plain Markdown for copying: each cite tag becomes `"quote" (p. N)`, or `"quote" (paper K, p. N)`. */
 export function citationsToMarkdown(text: string): string {
-  return text.replace(CITE_RE, (_m, page: string, quote: string) => `“${quote.replace(/\s+/g, ' ').trim()}” (p. ${page})`)
+  return text.replace(CITE_RE, (m, attrs: string, quote: string) => {
+    const where = citeAttrs(attrs)
+    if (!where) return m
+    const q = quote.replace(/\s+/g, ' ').trim()
+    return where.paper === 1 ? `“${q}” (p. ${where.page})` : `“${q}” (paper ${where.paper}, p. ${where.page})`
+  })
 }
 
 /** While streaming, don't show a cite tag until it is complete. */

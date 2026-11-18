@@ -12,6 +12,7 @@ The app is a thin front end over the **Claude Code CLI (`claude`) installed on y
 
 - **Quotes you can check:** Claude quotes the paper verbatim; each quote is highlighted in the PDF, in one colour per answer, and clicking it jumps there.
 - **Papers from anywhere:** open a PDF, or paste a link (arXiv, ACL Anthology, a DOI, …). A blog post or article is saved as a PDF that looks like the website.
+- **Several papers side by side:** open more papers in a session (with **+** above the PDF, by dropping PDFs on it, or from the materials). They show as tabs, and ◫ splits the view into two panes. Claude can quote any of them; clicking a quote from another paper opens it next to the one you are reading.
 - **Your own highlights**, in six colours, saved with the session.
 - **Ask about a passage:** select text in the PDF and ask Claude about exactly that.
 - **Figures, diagrams and interactive plots in answers:** Claude can show figures cut from the paper, plots, GIFs and videos, draw diagrams, and make plots you can zoom and rotate.

@@ -1,8 +1,6 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { PDFDocumentProxy } from 'pdfjs-dist'
-import { api, type HighlightColor, type Material, type Message, type PdfSelection, type Session, type SessionHit, type ToolCall, type TraceStep, type UserHighlight } from './api'
+import { api, type HighlightColor, type Material, type Message, type Paper, type PdfSelection, type Session, type SessionHit, type ToolCall, type TraceStep, type UserHighlight } from './api'
 import {
-  buildPageIndex,
   citeHue,
   matchCitation,
   parseCitations,
@@ -12,7 +10,10 @@ import {
   type PageIndex,
 } from './citations'
 import MessageView from './MessageView'
-import PdfPane, { type AskMark, type ShownHighlight } from './PdfPane'
+import PdfPane, { type AskMark, type PaneView, type ShownHighlight } from './PdfPane'
+import PaperTabs from './PaperTabs'
+import * as panes from './paneGroups'
+import { loadPageIndexes } from './pdfText'
 import './App.css'
 
 type Draft = { text: string; tools: ToolCall[]; trace: TraceStep[] }
@@ -20,6 +21,12 @@ type Draft = { text: string; tools: ToolCall[]; trace: TraceStep[] }
 type PastedImage = { file: File; url: string }
 const MAX_IMAGES = 10 // per message; the server allows as many
 const MAX_IMAGE_MB = 10
+
+/** Which paper a passage is in (1 for passages saved before there could be several). */
+const paperOf = (s: { paper?: number }) => s.paper ?? 1
+
+const NO_MATCHES = new Map<string, CitationMatch>()
+const NO_HIGHLIGHTS: ShownHighlight[] = []
 
 const EXAMPLES = [
   'Summarize this paper and explain the main method.',
@@ -40,13 +47,23 @@ export default function App() {
   const [uploading, setUploading] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(loadSidebarWidth)
-  const [split, setSplit] = useState(55) // PDF pane width in %
-  const [pdfDoc, setPdfDoc] = useState<PDFDocumentProxy | null>(null)
-  const [pageIndexes, setPageIndexes] = useState<PageIndex[] | null>(null)
+  const [split, setSplit] = useState(55) // PDF area width in %
+  const [papers, setPapers] = useState<Paper[]>([]) // papers opened next to the first one
+  const [addingPaper, setAddingPaper] = useState(false)
+  // The text of each paper (by number), for finding quotes; filled as the papers are indexed.
+  const [pageIndexes, setPageIndexes] = useState<Map<number, PageIndex[]>>(() => new Map())
+  const indexing = useRef(new Set<string>()) // `${session}:${paper}` being or already indexed
+  // The PDF panes, one or two side by side, each with its own tabs (see paneGroups).
+  const [groups, setGroups] = useState<panes.Group[]>([{ tabs: [1], shown: 1 }])
+  const [activePane, setActivePane] = useState(0) // the pane last clicked into
+  const [paneSplit, setPaneSplit] = useState(50) // width of the left pane in % of the PDF area
+  const [chatHidden, setChatHidden] = useState(false)
+  const [pdfDragOver, setPdfDragOver] = useState(false)
+  const views = useRef(new Map<number, PaneView>()) // where each paper was left, by number
   const [activeMessageId, setActiveMessageId] = useState<number | null>(null)
-  const [focus, setFocus] = useState<{ key: string; nonce: number } | null>(null)
+  const [focus, setFocus] = useState<{ key: string; nonce: number; pane: number } | null>(null)
   const [askSelection, setAskSelection] = useState<PdfSelection | null>(null) // attached to the next question
-  const [shownSelection, setShownSelection] = useState<{ selection: PdfSelection; nonce: number } | null>(null)
+  const [shownSelection, setShownSelection] = useState<{ selection: PdfSelection; nonce: number; pane: number } | null>(null)
   const currentIdRef = useRef(currentId)
   currentIdRef.current = currentId
   const createdHere = useRef<string | null>(null) // session just created by send/openPdf: keep its state
@@ -96,6 +113,7 @@ export default function App() {
     setMessages(data.messages)
     setHighlights(data.highlights)
     setMaterials(data.materials)
+    setPapers(data.papers)
     const lastAnswer = [...data.messages].reverse().find((m) => m.role === 'assistant')
     setActiveMessageId(lastAnswer?.id ?? null)
   }, [])
@@ -115,9 +133,13 @@ export default function App() {
     setMessages([])
     setHighlights([])
     setMaterials([])
+    setPapers([])
     setDraft(null)
-    setPdfDoc(null)
-    setPageIndexes(null)
+    setPageIndexes(new Map())
+    indexing.current.clear()
+    views.current.clear()
+    setGroups([{ tabs: [1], shown: 1 }])
+    setActivePane(0)
     setFocus(null)
     setActiveMessageId(null)
     setAskSelection(null)
@@ -136,33 +158,70 @@ export default function App() {
     return () => clearInterval(timer)
   }, [currentId, session?.running, draft, loadSession, refreshSessions])
 
-  // Index the text of every page once the PDF is loaded, for finding quotes.
-  useEffect(() => {
-    if (!pdfDoc) return
-    let cancelled = false
-    Promise.all(
-      Array.from({ length: pdfDoc.numPages }, (_, i) =>
-        pdfDoc.getPage(i + 1).then((p) => p.getTextContent()).then((tc) => buildPageIndex(tc.items as { str?: string }[])),
-      ),
-    )
-      .then((idx) => !cancelled && setPageIndexes(idx))
-      .catch(() => {}) // the document was closed (e.g. the session was switched)
-    return () => {
-      cancelled = true
-    }
-  }, [pdfDoc])
+  // Every paper of the session: the first one (paper.pdf), then those opened next to it.
+  const allPapers = useMemo<Paper[]>(() => {
+    if (!session?.has_pdf) return []
+    const first = { num: 1, title: session.pdf_title || session.title, filename: session.pdf_filename ?? 'paper.pdf' }
+    return [first, ...papers]
+  }, [session?.has_pdf, session?.pdf_title, session?.title, session?.pdf_filename, papers])
+  const paperTitles = useMemo(() => new Map(allPapers.map((p) => [p.num, p.title])), [allPapers])
 
-  const matches = useMemo(() => {
-    const out = new Map<string, CitationMatch>()
-    if (!pageIndexes) return out
+  // The panes made valid for the session's papers, and the paper each one shows.
+  const shownGroups = useMemo(() => panes.normalize(groups, allPapers.map((p) => p.num)), [groups, allPapers])
+  const shownPanes = useMemo(() => shownGroups.map((g) => g.shown), [shownGroups])
+  const groupsRef = useRef(shownGroups)
+  groupsRef.current = shownGroups
+  const activePaneRef = useRef(activePane)
+  activePaneRef.current = Math.max(0, Math.min(activePane, shownGroups.length - 1))
+  const paperTitlesRef = useRef(paperTitles)
+  paperTitlesRef.current = paperTitles
+
+  const changeGroups = useCallback((next: panes.Group[]) => {
+    if (next.length === 2 && groupsRef.current.length === 1) setSplit((s) => Math.max(s, 68)) // room for two papers
+    groupsRef.current = next
+    setGroups(next)
+  }, [])
+
+  /** Make `paper` visible without changing what the user is reading; returns its pane. */
+  const reveal = useCallback(
+    (paper: number): number => {
+      const { groups: next, pane } = panes.reveal(groupsRef.current, activePaneRef.current, paper)
+      if (next !== groupsRef.current) changeGroups(next)
+      return pane
+    },
+    [changeGroups],
+  )
+
+  // Index the text of every paper, for finding quotes, also of papers not shown.
+  useEffect(() => {
+    const sid = currentId
+    if (!sid) return
+    for (const p of allPapers) {
+      const tag = `${sid}:${p.num}`
+      if (indexing.current.has(tag)) continue
+      indexing.current.add(tag)
+      loadPageIndexes(api.paperUrl(sid, p.num))
+        .then((idx) => currentIdRef.current === sid && setPageIndexes((m) => new Map(m).set(p.num, idx)))
+        .catch(() => indexing.current.delete(tag)) // e.g. the session was deleted; try again next time
+    }
+  }, [currentId, allPapers])
+
+  // Where each quote is: per paper, the quotes found in it; and which paper each quote names.
+  const { matchesByPaper, citePaper } = useMemo(() => {
+    const matchesByPaper = new Map<number, Map<string, CitationMatch>>()
+    const citePaper = new Map<string, number>()
     for (const m of messages) {
       if (m.role !== 'assistant') continue
       for (const c of parseCitations(m.text, m.id).citations) {
-        const hit = matchCitation(c, pageIndexes)
-        if (hit) out.set(c.key, hit)
+        citePaper.set(c.key, c.paper)
+        const index = pageIndexes.get(c.paper)
+        const hit = index && matchCitation(c, index)
+        if (!hit) continue
+        if (!matchesByPaper.has(c.paper)) matchesByPaper.set(c.paper, new Map())
+        matchesByPaper.get(c.paper)!.set(c.key, hit)
       }
     }
-    return out
+    return { matchesByPaper, citePaper }
   }, [messages, pageIndexes])
 
   // One highlight color per answer that quotes the paper, in order; the answer
@@ -175,22 +234,32 @@ export default function App() {
     return { hues, nextHue: citeHue(hues.size) }
   }, [messages])
 
-  // The user's own highlights, placed on the current PDF text.
-  const shownHighlights = useMemo<ShownHighlight[]>(() => {
-    if (!pageIndexes) return []
-    return highlights.flatMap((h) => {
-      const match = resolveHighlight(h, pageIndexes)
-      return match ? [{ id: h.id, color: h.color, text: h.text, match }] : []
-    })
+  // The user's own highlights, placed on the text of their papers.
+  const highlightsByPaper = useMemo(() => {
+    const out = new Map<number, ShownHighlight[]>()
+    for (const h of highlights) {
+      const index = pageIndexes.get(paperOf(h))
+      const match = index && resolveHighlight(h, index)
+      if (!match) continue
+      if (!out.has(paperOf(h))) out.set(paperOf(h), [])
+      out.get(paperOf(h))!.push({ id: h.id, color: h.color, text: h.text, match })
+    }
+    return out
   }, [highlights, pageIndexes])
 
-  // The passage marked with a dashed outline: one the user clicked in a sent
-  // question (shown for a few seconds), else the one attached to the next question.
-  const askMark = useMemo<AskMark | null>(() => {
+  // The passage marked with a dashed outline, per pane: one the user clicked in a sent
+  // question (shown for a few seconds, scrolled to in its pane), else the one attached
+  // to the next question.
+  const askMarks = useMemo<(AskMark | null)[]>(() => {
     const target = shownSelection?.selection ?? askSelection
-    const match = target && pageIndexes && resolveHighlight(target, pageIndexes)
-    return match ? { match, nonce: shownSelection?.nonce ?? 0, scroll: !!shownSelection } : null
-  }, [shownSelection, askSelection, pageIndexes])
+    const index = target && pageIndexes.get(paperOf(target))
+    const match = target && index && resolveHighlight(target, index)
+    return shownPanes.map((num, i) =>
+      match && paperOf(target) === num
+        ? { match, nonce: shownSelection?.nonce ?? 0, scroll: !!shownSelection && shownSelection.pane === i }
+        : null,
+    )
+  }, [shownSelection, askSelection, pageIndexes, shownPanes])
 
   useEffect(() => {
     if (!shownSelection) return
@@ -199,12 +268,15 @@ export default function App() {
   }, [shownSelection])
 
   const showSelection = useCallback(
-    (selection: PdfSelection) => setShownSelection({ selection, nonce: Date.now() }),
-    [],
+    (selection: PdfSelection) => {
+      if (!paperTitlesRef.current.has(paperOf(selection))) return // that paper was removed
+      setShownSelection({ selection, nonce: Date.now(), pane: reveal(paperOf(selection)) })
+    },
+    [reveal],
   )
 
   const createHighlight = useCallback(
-    (h: PdfSelection, color: HighlightColor) => {
+    (h: PdfSelection & { paper: number }, color: HighlightColor) => {
       const sid = currentIdRef.current
       if (!sid) return
       api
@@ -233,12 +305,150 @@ export default function App() {
       .catch((e) => setError(`Could not remove the highlight: ${e.message ?? e}`))
   }, [])
 
-  const found = useCallback((key: string) => (pageIndexes ? matches.has(key) : undefined), [pageIndexes, matches])
+  // Whether a quote was found in its paper; undefined until that paper is indexed.
+  const found = useCallback(
+    (key: string) => {
+      const paper = citePaper.get(key)
+      if (paper === undefined || !paperTitles.size) return undefined
+      if (!paperTitles.has(paper)) return false // a paper that isn't (or is no longer) in the session
+      return pageIndexes.has(paper) ? !!matchesByPaper.get(paper)?.has(key) : undefined
+    },
+    [citePaper, paperTitles, pageIndexes, matchesByPaper],
+  )
 
-  const onCite = useCallback((c: Citation) => {
-    setActiveMessageId(c.messageId)
-    setFocus({ key: c.key, nonce: Date.now() })
-  }, [])
+  const onCite = useCallback(
+    (c: Citation) => {
+      setActiveMessageId(c.messageId)
+      if (!paperTitlesRef.current.has(c.paper)) return
+      setFocus({ key: c.key, nonce: Date.now(), pane: reveal(c.paper) })
+    },
+    [reveal],
+  )
+
+  /** Show another paper in a pane (a click on one of its tabs). */
+  const selectPaper = (pane: number, num: number) => {
+    setActivePane(pane)
+    if (shownPanes[pane] === num) return
+    changeGroups(panes.show(shownGroups, pane, num))
+    setFocus((f) => (f?.pane === pane ? null : f))
+  }
+
+  /** A tab dragged onto the tabs of pane `pane`. */
+  const moveTab = (num: number, pane: number) => {
+    const next = panes.moveTo(shownGroups, num, pane)
+    changeGroups(next)
+    setActivePane(Math.max(0, next.findIndex((g) => g.tabs.includes(num))))
+    setFocus(null)
+  }
+
+  const splitPanes = () => {
+    const next = panes.split(shownGroups, 0)
+    if (!next) return
+    changeGroups(next)
+    setActivePane(1)
+  }
+
+  const closePane = (pane: number) => {
+    changeGroups(panes.close(shownGroups, pane))
+    setActivePane(0)
+    setFocus(null)
+  }
+
+  // Papers added go to `pane` (the pane whose + was used), else beside the pane being read.
+  async function addPapers(files: File[], pane?: number) {
+    const sid = currentIdRef.current
+    if (!sid || !files.length) return
+    setError(null)
+    setAddingPaper(true)
+    const failed: string[] = []
+    for (const f of files) {
+      try {
+        const added = await api.addPaper(sid, f)
+        if (currentIdRef.current !== sid) continue
+        setPapers((all) => [...all, added])
+        showNewPaper(added.num, pane)
+      } catch (e) {
+        failed.push(`${f.name}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+    setAddingPaper(false)
+    if (currentIdRef.current !== sid) return
+    if (failed.length) setError(`Could not open ${failed.length === 1 ? 'a paper' : `${failed.length} papers`}: ${failed.join('; ')}`)
+  }
+
+  async function addPaperFromLink(url: string, pane?: number) {
+    const sid = currentIdRef.current
+    if (!sid) return
+    setError(null)
+    setAddingPaper(true)
+    try {
+      const added = await api.addPaperFromLink(sid, url)
+      if (currentIdRef.current !== sid) return
+      setPapers((all) => [...all, added])
+      showNewPaper(added.num, pane)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setAddingPaper(false)
+    }
+  }
+
+  async function openMaterialAsPaper(m: Material, pane?: number) {
+    const sid = currentIdRef.current
+    if (!sid) return
+    setError(null)
+    setAddingPaper(true)
+    try {
+      const added = await api.openMaterialAsPaper(sid, m.id)
+      if (currentIdRef.current !== sid) return
+      setPapers((all) => [...all, added])
+      setMaterials((all) => all.filter((x) => x.id !== m.id))
+      showNewPaper(added.num, pane)
+    } catch (e) {
+      setError(`Could not open ${m.filename}: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setAddingPaper(false)
+    }
+  }
+
+  /** A paper was just added: open it in `pane` if there are two panes, else beside the one
+   * being read (in a second pane, opened if needed). */
+  function showNewPaper(num: number, pane?: number) {
+    const cur = groupsRef.current
+    const target = cur.length === 1 ? 1 : (pane ?? 1 - activePaneRef.current)
+    changeGroups(panes.moveTo(cur, num, target))
+    setActivePane(target)
+  }
+
+  async function removePaper(num: number) {
+    const sid = currentIdRef.current
+    const title = paperTitles.get(num)
+    if (!sid || num === 1) return
+    if (!confirm(`Remove paper ${num}${title ? ` “${title}”` : ''} from this session? Your highlights in it are removed too.`)) return
+    try {
+      await api.removePaper(sid, num)
+      if (currentIdRef.current !== sid) return
+      setPapers((all) => all.filter((p) => p.num !== num))
+      // panes.normalize drops it from its pane, and the pane if that was its only paper.
+      setHighlights((all) => all.filter((h) => paperOf(h) !== num))
+      setAskSelection((s) => (s && paperOf(s) === num ? null : s))
+      views.current.delete(num)
+    } catch (e) {
+      setError(`Could not remove the paper: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  /** Files dropped on the PDFs: PDFs are opened as papers, anything else becomes a material. */
+  function dropOnPdfs(e: React.DragEvent) {
+    e.preventDefault()
+    setPdfDragOver(false)
+    const files = [...e.dataTransfer.files]
+    const isPdf = (f: File) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+    const pdfs = files.filter(isPdf)
+    const others = files.filter((f) => !isPdf(f))
+    if (pdfs.length) addPapers(pdfs)
+    if (others.length) addMaterials(others)
+  }
 
   async function ensureSession(): Promise<string> {
     if (currentId) return currentId
@@ -380,8 +590,81 @@ export default function App() {
       addingMaterials={addingMaterials}
       onAddMaterials={addMaterials}
       onRemoveMaterial={removeMaterial}
+      onOpenMaterial={session?.has_pdf ? openMaterialAsPaper : undefined}
+      paperTitles={paperTitles}
     />
   )
+
+  const twoPanes = shownPanes.length === 2
+  const pdfPane = (num: number, i: number) => {
+    const sid = session!.id
+    const paneFocus = focus && focus.pane === i && citePaper.get(focus.key) === num ? focus : null
+    return (
+      <div
+        key={i}
+        className={`pdf-group${twoPanes && i === activePaneRef.current ? ' active' : ''}`}
+        style={twoPanes && i === 0 ? { width: `${paneSplit}%`, flex: 'none' } : undefined}
+      >
+        <PaperTabs
+          papers={allPapers.filter((p) => shownGroups[i].tabs.includes(p.num))}
+          current={num}
+          onSelect={(n) => selectPaper(i, n)}
+          onDropTab={twoPanes ? (n) => moveTab(n, i) : undefined}
+          onRemove={removePaper}
+          adding={addingPaper}
+          onAddFiles={(files) => addPapers(files, i)}
+          onAddLink={(url) => addPaperFromLink(url, i)}
+          pdfMaterials={materials.filter((m) => m.filename.toLowerCase().endsWith('.pdf'))}
+          onOpenMaterial={(m) => openMaterialAsPaper(m, i)}
+        >
+          {twoPanes ? (
+            <button className="icon" onClick={() => closePane(i)} title="Close this pane" aria-label="Close this pane">
+              ×
+            </button>
+          ) : (
+            <button
+              className="icon"
+              onClick={splitPanes}
+              disabled={shownGroups[0].tabs.length < 2}
+              title={shownGroups[0].tabs.length < 2 ? 'Open another paper (+) to see two side by side' : 'Show two papers side by side'}
+              aria-label="Split"
+            >
+              ◫
+            </button>
+          )}
+          {i === shownPanes.length - 1 && (
+            <button
+              className="icon"
+              onClick={() => setChatHidden((h) => !h)}
+              title={chatHidden ? 'Show the chat' : 'Hide the chat (more room for the papers)'}
+              aria-label={chatHidden ? 'Show the chat' : 'Hide the chat'}
+            >
+              {chatHidden ? '💬' : '⇥'}
+            </button>
+          )}
+        </PaperTabs>
+        {/* keyed by session, pane and paper: each paper gets a fresh viewer, back where it was left */}
+        <ErrorBoundary key={`${sid}:${i}:${num}`} fallback={<div className="pdf-message">The PDF viewer failed. Reload the page to try again.</div>}>
+          <PdfPane
+            url={api.paperUrl(sid, num)}
+            matches={matchesByPaper.get(num) ?? NO_MATCHES}
+            hues={hues}
+            activeMessageId={activeMessageId}
+            focus={paneFocus}
+            userHighlights={highlightsByPaper.get(num) ?? NO_HIGHLIGHTS}
+            askMark={askMarks[i]}
+            view={views.current.get(num)}
+            onView={(v) => views.current.set(num, v)}
+            onActivate={() => setActivePane(i)}
+            onAsk={(sel) => setAskSelection({ ...sel, paper: num })}
+            onCreateHighlight={(h, color) => createHighlight({ ...h, paper: num }, color)}
+            onRecolorHighlight={recolorHighlight}
+            onDeleteHighlight={deleteHighlight}
+          />
+        </ErrorBoundary>
+      </div>
+    )
+  }
 
   return (
     <div className="app">
@@ -464,27 +747,28 @@ export default function App() {
         )}
         {session?.has_pdf && session.id === currentId ? (
           <div className="split">
-            <div className="split-left" style={{ width: `${split}%` }}>
-              {/* keyed by session: each paper gets a fresh viewer */}
-              <ErrorBoundary key={session.id} fallback={<div className="pdf-message">The PDF viewer failed. Reload the page to try again.</div>}>
-                <PdfPane
-                  url={api.pdfUrl(session.id)}
-                  matches={matches}
-                  hues={hues}
-                  activeMessageId={activeMessageId}
-                  focus={focus}
-                  userHighlights={shownHighlights}
-                  askMark={askMark}
-                  onAsk={setAskSelection}
-                  onDocument={setPdfDoc}
-                  onCreateHighlight={createHighlight}
-                  onRecolorHighlight={recolorHighlight}
-                  onDeleteHighlight={deleteHighlight}
-                />
-              </ErrorBoundary>
+            <div className="split-left" style={chatHidden ? { flex: 1 } : { width: `${split}%` }}>
+              <div
+                className={`pdf-area${pdfDragOver ? ' drag-over' : ''}`}
+                onDragOver={(e) => {
+                  if (![...e.dataTransfer.types].includes('Files')) return
+                  e.preventDefault()
+                  setPdfDragOver(true)
+                }}
+                onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setPdfDragOver(false)}
+                onDrop={dropOnPdfs}
+              >
+                {pdfPane(shownPanes[0], 0)}
+                {twoPanes && <Divider onDrag={setPaneSplit} />}
+                {twoPanes && pdfPane(shownPanes[1], 1)}
+              </div>
             </div>
-            <Divider onDrag={setSplit} />
-            <div className="split-right">{chat}</div>
+            {!chatHidden && (
+              <>
+                <Divider onDrag={setSplit} />
+                <div className="split-right">{chat}</div>
+              </>
+            )}
           </div>
         ) : (
           <div className="single">{chat}</div>
@@ -621,6 +905,8 @@ type ChatProps = {
   addingMaterials: boolean
   onAddMaterials: (files: File[]) => void
   onRemoveMaterial: (m: Material) => void
+  onOpenMaterial?: (m: Material) => void // show a PDF material as a paper
+  paperTitles: Map<number, string>
 }
 
 function ChatPane({
@@ -644,6 +930,8 @@ function ChatPane({
   addingMaterials,
   onAddMaterials,
   onRemoveMaterial,
+  onOpenMaterial,
+  paperTitles,
 }: ChatProps) {
   const materialInput = useRef<HTMLInputElement>(null)
   const [showMaterials, setShowMaterials] = useState(false)
@@ -754,6 +1042,16 @@ function ChatPane({
                         {m.filename}
                       </span>
                       <span className="muted small">{formatSize(m.size)}</span>
+                      {onOpenMaterial && m.filename.toLowerCase().endsWith('.pdf') && (
+                        <button
+                          className="icon"
+                          onClick={() => onOpenMaterial(m)}
+                          title="Show this PDF as a paper, next to the others (Claude can then quote it)"
+                          aria-label={`Open ${m.filename} as a paper`}
+                        >
+                          📄
+                        </button>
+                      )}
                       <button className="icon" onClick={() => onRemoveMaterial(m)} title="Remove" aria-label={`Remove ${m.filename}`}>
                         ×
                       </button>
@@ -803,16 +1101,27 @@ function ChatPane({
             onCite={onCite}
             onShowSelection={onShowSelection}
             sessionId={session?.id}
+            paperTitles={paperTitles}
           />
         ))}
-        {draft && <MessageView message={{ id: -1, role: 'assistant', error: null, ...draft }} hue={nextHue} sessionId={session?.id} streaming />}
+        {draft && (
+          <MessageView
+            message={{ id: -1, role: 'assistant', error: null, ...draft }}
+            hue={nextHue}
+            sessionId={session?.id}
+            paperTitles={paperTitles}
+            streaming
+          />
+        )}
         {!draft && session?.running && <div className="thinking">Claude is still answering…</div>}
       </div>
 
       <div className="composer">
         {askSelection && (
           <div className="ask-chip">
-            <span className="ask-chip-label">Asking about p.{askSelection.page}</span>
+            <span className="ask-chip-label" title={paperTitles.size > 1 ? paperTitles.get(paperOf(askSelection)) : undefined}>
+              Asking about {paperTitles.size > 1 ? `paper ${paperOf(askSelection)}, ` : ''}p.{askSelection.page}
+            </span>
             <span className="ask-chip-text">“{askSelection.text}”</span>
             <button className="icon" onClick={onClearAsk} title="Remove the passage" aria-label="Remove the passage">
               ×

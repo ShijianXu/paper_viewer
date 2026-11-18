@@ -306,6 +306,91 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
   font-size: 13px;
 }
 .pdf-toolbar button { padding: 2px 10px; min-width: 32px; }
+.pdf-group .pdf-toolbar { padding-left: 12px; }
+
+/* One or two PDF panes side by side, each with the session's papers as tabs. */
+.pdf-area { flex: 1; min-width: 0; display: flex; }
+.pdf-area.drag-over { outline: 3px dashed var(--accent); outline-offset: -8px; }
+.pdf-group { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.pdf-group .pdf-pane { min-height: 0; }
+.pdf-group.active .paper-tabs { box-shadow: inset 0 -2px 0 var(--accent); }
+.paper-tabs.drop-target { background: color-mix(in srgb, var(--accent) 18%, var(--bg-sunken)); }
+.paper-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 6px 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sunken);
+  font-size: 13px;
+  min-height: 36px;
+}
+.pdf-group:first-child .paper-tabs { padding-left: 40px; } /* room for the » button */
+.paper-tabs-list { flex: 1; min-width: 0; display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; scrollbar-width: thin; }
+.paper-tabs-actions { flex: none; display: flex; align-items: center; gap: 2px; padding-bottom: 4px; }
+.paper-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  min-width: 60px;
+  padding: 5px 6px 5px 10px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.paper-tab:hover { background: var(--bg-soft); color: var(--fg); }
+.paper-tab.current { background: var(--bg-soft); color: var(--fg); border-color: var(--border); margin-bottom: -1px; padding-bottom: 6px; }
+.paper-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.paper-tab-num {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  text-align: center;
+  background: var(--border);
+  color: var(--fg);
+}
+.paper-tab-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.paper-tab-close { flex: none; padding: 0 4px; line-height: 1.2; visibility: hidden; }
+.paper-tab:hover .paper-tab-close, .paper-tab.current .paper-tab-close { visibility: visible; }
+.paper-add { position: relative; flex: none; padding-bottom: 4px; }
+.paper-add > .icon { font-size: 16px; line-height: 1; padding: 2px 8px; }
+.paper-add-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 20;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+.paper-add-menu > button { text-align: left; }
+.paper-add-link { display: flex; gap: 6px; }
+.paper-add-link input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.paper-add-link input:focus { outline: none; border-color: var(--accent); }
+.paper-add-material { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .pdf-scroller { flex: 1; overflow: auto; padding: 16px; }
 .pdf-scroller .react-pdf__Document { display: flex; flex-direction: column; align-items: center; gap: 16px; width: max-content; min-width: 100%; }
 .pdf-page { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25); background: white; }

@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id                TEXT PRIMARY KEY,
     title             TEXT NOT NULL,
     pdf_filename      TEXT,             -- name of the file the user opened
+    pdf_title         TEXT,             -- the paper's title (sessions can be renamed)
     pdf_sha256        TEXT,
     claude_session_id TEXT,             -- for `claude --resume`
     pdf_announced     INTEGER NOT NULL DEFAULT 0,  -- Claude has been told where the PDF is
@@ -36,6 +37,7 @@ CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, id);
 CREATE TABLE IF NOT EXISTS highlights (       -- made by the user with the mouse
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    paper       INTEGER NOT NULL DEFAULT 1,   -- which paper: 1, or the num of one in `papers`
     page        INTEGER NOT NULL,             -- 1-based
     ranges      TEXT NOT NULL,                -- JSON [[itemIndex, start, end], ...] in the page's text items
     text        TEXT NOT NULL,                -- the selected text, to re-find it if the ranges don't match
@@ -53,6 +55,18 @@ CREATE TABLE IF NOT EXISTS materials (        -- extra files for Claude, stored 
     created_at  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS materials_session ON materials(session_id, id);
+CREATE TABLE IF NOT EXISTS papers (           -- papers opened next to the first one, in <session>/papers/
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    num         INTEGER NOT NULL,             -- 2, 3, ...: how the app and Claude refer to it; never reused
+    filename    TEXT NOT NULL,                -- name in the papers folder
+    title       TEXT NOT NULL,
+    sha256      TEXT NOT NULL,
+    -- new: Claude hasn't been told yet; known; removed: Claude still has to be told; gone
+    state       TEXT NOT NULL DEFAULT 'new',
+    created_at  REAL NOT NULL,
+    UNIQUE (session_id, num)
+);
 """
 
 
@@ -69,7 +83,13 @@ def connect():
 
 
 # Columns added after the first release: (table, column, definition).
-MIGRATIONS = [("messages", "selection", "TEXT"), ("messages", "trace", "TEXT"), ("messages", "images", "TEXT")]
+MIGRATIONS = [
+    ("messages", "selection", "TEXT"),
+    ("messages", "trace", "TEXT"),
+    ("messages", "images", "TEXT"),
+    ("sessions", "pdf_title", "TEXT"),
+    ("highlights", "paper", "INTEGER NOT NULL DEFAULT 1"),
+]
 
 
 def init() -> None:
@@ -155,12 +175,12 @@ def list_highlights(session_id: str) -> list[dict]:
     return [_highlight(r) for r in rows]
 
 
-def add_highlight(session_id: str, page: int, ranges: list, text: str, color: str) -> dict:
+def add_highlight(session_id: str, paper: int, page: int, ranges: list, text: str, color: str) -> dict:
     with connect() as c:
         cur = c.execute(
-            "INSERT INTO highlights (session_id, page, ranges, text, color, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (session_id, page, json.dumps(ranges), text, color, time.time()),
+            "INSERT INTO highlights (session_id, paper, page, ranges, text, color, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (session_id, paper, page, json.dumps(ranges), text, color, time.time()),
         )
         row = c.execute("SELECT * FROM highlights WHERE id = ?", (cur.lastrowid,)).fetchone()
     return _highlight(row)
@@ -220,6 +240,12 @@ def remove_material(session_id: str, material_id: int) -> dict | None:
     return dict(row)
 
 
+def forget_material(session_id: str, material_id: int) -> None:
+    """Drop a material without telling Claude (it moved: it became a paper, announced as such)."""
+    with connect() as c:
+        c.execute("DELETE FROM materials WHERE id = ? AND session_id = ?", (material_id, session_id))
+
+
 def materials_announced(session_id: str, ids: list[int]) -> None:
     """After a turn told Claude about these materials: mark added ones known, drop removed ones."""
     with connect() as c:
@@ -235,6 +261,76 @@ def reset_materials_announced(session_id: str) -> None:
     with connect() as c:
         c.execute("DELETE FROM materials WHERE session_id = ? AND removed = 1", (session_id,))
         c.execute("UPDATE materials SET announced = 0 WHERE session_id = ?", (session_id,))
+
+
+# ---------------------------------------------------------------- papers next to the first one
+
+LIVE_PAPER = "state IN ('new', 'known')"
+
+
+def list_papers(session_id: str, include_removed: bool = False) -> list[dict]:
+    where = "state != 'gone'" if include_removed else LIVE_PAPER
+    with connect() as c:
+        rows = c.execute(
+            f"SELECT * FROM papers WHERE session_id = ? AND {where} ORDER BY num", (session_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_paper(session_id: str, num: int) -> dict | None:
+    with connect() as c:
+        row = c.execute(
+            f"SELECT * FROM papers WHERE session_id = ? AND num = ? AND {LIVE_PAPER}", (session_id, num)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def add_paper(session_id: str, filename: str, title: str, sha256: str) -> dict:
+    """Add a paper; it gets the next number (2 for the first one added), never one used before."""
+    with connect() as c:
+        # One statement, so two papers added at once can't get the same number.
+        cur = c.execute(
+            "INSERT INTO papers (session_id, num, filename, title, sha256, created_at)"
+            " SELECT ?, COALESCE(MAX(num), 1) + 1, ?, ?, ?, ? FROM papers WHERE session_id = ?",
+            (session_id, filename, title, sha256, time.time(), session_id),
+        )
+        row = c.execute("SELECT * FROM papers WHERE id = ?", (cur.lastrowid,)).fetchone()
+    update_session(session_id)
+    return dict(row)
+
+
+def remove_paper(session_id: str, num: int) -> dict | None:
+    """Take a paper out of the session, with its highlights; returns it, or None.
+    Its row stays, so its number is not given to another paper."""
+    with connect() as c:
+        row = c.execute(
+            f"SELECT * FROM papers WHERE session_id = ? AND num = ? AND {LIVE_PAPER}", (session_id, num)
+        ).fetchone()
+        if not row:
+            return None
+        # Claude is told even about a 'new' one: a turn running now may have announced it.
+        c.execute("UPDATE papers SET state = 'removed' WHERE id = ?", (row["id"],))
+        c.execute("DELETE FROM highlights WHERE session_id = ? AND paper = ?", (session_id, num))
+    update_session(session_id)
+    return dict(row)
+
+
+def papers_announced(session_id: str, ids: list[int]) -> None:
+    """After a turn told Claude about these papers: added ones are known, removed ones gone."""
+    with connect() as c:
+        for pid in ids:
+            c.execute(
+                "UPDATE papers SET state = CASE state WHEN 'new' THEN 'known' WHEN 'removed' THEN 'gone' ELSE state END"
+                " WHERE id = ? AND session_id = ?",
+                (pid, session_id),
+            )
+
+
+def reset_papers_announced(session_id: str) -> None:
+    """A new Claude conversation knows none of the papers."""
+    with connect() as c:
+        c.execute("UPDATE papers SET state = 'gone' WHERE session_id = ? AND state = 'removed'", (session_id,))
+        c.execute("UPDATE papers SET state = 'new' WHERE session_id = ? AND state = 'known'", (session_id,))
 
 
 def add_message(
@@ -268,6 +364,8 @@ def add_message(
 _SEARCH_SOURCES = [
     ("title", "SELECT id, title FROM sessions WHERE title LIKE ? ESCAPE '\\'"),
     ("file", "SELECT id, pdf_filename FROM sessions WHERE pdf_filename LIKE ? ESCAPE '\\'"),
+    ("file", f"SELECT session_id, title FROM papers WHERE {LIVE_PAPER} AND title LIKE ? ESCAPE '\\'"),
+    ("file", f"SELECT session_id, filename FROM papers WHERE {LIVE_PAPER} AND filename LIKE ? ESCAPE '\\'"),
     ("highlight", "SELECT session_id, text FROM highlights WHERE text LIKE ? ESCAPE '\\'"),
     ("material", "SELECT session_id, filename FROM materials WHERE removed = 0 AND filename LIKE ? ESCAPE '\\'"),
     ("question", "SELECT session_id, text FROM messages WHERE role = 'user' AND text LIKE ? ESCAPE '\\'"),
