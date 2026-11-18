@@ -10,7 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "katex": "^0.19.1",
+    "katex": "^0.16.47",
     "mermaid": "^12.3.0",
     "plotly.js-dist-min": "^4.2.0",
     "react": "^19.1.0",

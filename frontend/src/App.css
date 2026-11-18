@@ -120,6 +120,7 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
   color: var(--muted);
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -244,7 +245,10 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
 .markdown table { border-collapse: collapse; display: block; overflow-x: auto; }
 .markdown th, .markdown td { border: 1px solid var(--border); padding: 4px 8px; }
 .markdown a { color: var(--accent); }
-.markdown .katex-display { overflow-x: auto; overflow-y: hidden; }
+/* Keep the parent's overflow-wrap out of KaTeX, it breaks the math layout. */
+.markdown .katex { overflow-wrap: normal; word-break: normal; }
+/* Scrolling clips vertically too, so pad the box to leave room for tall super/subscripts. */
+.markdown .katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.4em 0; }
 
 /* Quote chips take the color of their answer's highlights (--h, set per message). */
 .cite {
