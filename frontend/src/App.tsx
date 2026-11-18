@@ -59,6 +59,8 @@ export default function App() {
   const [paneSplit, setPaneSplit] = useState(50) // width of the left pane in % of the PDF area
   const [chatHidden, setChatHidden] = useState(false)
   const [pdfDragOver, setPdfDragOver] = useState(false)
+  // Files dragged over the session before a paper is open, and what dropping them will do.
+  const [singleDragOver, setSingleDragOver] = useState<'pdf' | 'materials' | null>(null)
   const views = useRef(new Map<number, PaneView>()) // where each paper was left, by number
   const [activeMessageId, setActiveMessageId] = useState<number | null>(null)
   const [focus, setFocus] = useState<{ key: string; nonce: number; pane: number } | null>(null)
@@ -771,7 +773,47 @@ export default function App() {
             )}
           </div>
         ) : (
-          <div className="single">{chat}</div>
+          // The chat is a narrow centred column: catch files dropped beside it too, which the browser
+          // would otherwise open in place of the app. Drops on the chat itself are handled there;
+          // either way one box over the whole area shows where to drop and what will happen.
+          <div
+            className={`single${singleDragOver ? ' drag-over' : ''}`}
+            onDragOver={(e) => {
+              if (![...e.dataTransfer.types].includes('Files')) return
+              e.preventDefault()
+              // Only the kinds of the files are known until the drop, not their names.
+              const files = [...e.dataTransfer.items].filter((i) => i.kind === 'file')
+              const onePdf = files.length <= 1 && (!files[0]?.type || files[0].type === 'application/pdf')
+              setSingleDragOver(onePdf && !session?.has_pdf ? 'pdf' : 'materials')
+            }}
+            onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setSingleDragOver(null)}
+            onDrop={(e) => {
+              setSingleDragOver(null)
+              if (e.defaultPrevented || ![...e.dataTransfer.types].includes('Files')) return
+              e.preventDefault()
+              const files = [...e.dataTransfer.files]
+              const isPdf = (f: File) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+              // Same rule as the chat: a single PDF becomes the paper, anything else is extra material.
+              if (files.length === 1 && isPdf(files[0]) && !session?.has_pdf) {
+                if (!uploading) openPdf(files[0])
+              } else if (files.length) addMaterials(files)
+            }}
+          >
+            {chat}
+            {singleDragOver && (
+              <div className="drop-box" aria-hidden>
+                <span className="drop-box-icon">{singleDragOver === 'pdf' ? '📄' : '📎'}</span>
+                <span className="drop-box-title">
+                  {singleDragOver === 'pdf' ? 'Drop the PDF to open it' : 'Drop to add as materials'}
+                </span>
+                <span className="muted">
+                  {singleDragOver === 'pdf'
+                    ? 'It is shown next to the chat'
+                    : 'Several files, or not a PDF: Claude can read them, they are not shown'}
+                </span>
+              </div>
+            )}
+          </div>
         )}
       </main>
     </div>
