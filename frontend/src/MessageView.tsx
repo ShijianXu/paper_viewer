@@ -1,8 +1,11 @@
-import { memo, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { memo, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
+import rehypeHighlight from 'rehype-highlight'
+import type { Element, ElementContent } from 'hast'
+import type { PluggableList } from 'unified'
 import 'katex/dist/katex.min.css'
 import { attachmentUrl, type Message, type PdfSelection, type ToolCall, type TraceStep } from './api'
 import { citationsToMarkdown, parseCitations, type Citation } from './citations'
@@ -77,13 +80,15 @@ function MessageView({ message, streaming, hue, active, found, onCite, onShowSel
       pre({ node, children }) {
         // ```mermaid and ```plotly blocks become diagrams and charts (once the answer is complete).
         const code = node?.children[0]
-        const classes = code?.type === 'element' ? code.properties.className : undefined
-        if (!streaming && Array.isArray(classes) && code?.type === 'element') {
-          const text = code.children.map((c) => (c.type === 'text' ? c.value : '')).join('')
-          if (classes.includes('language-mermaid')) return <MermaidDiagram code={text} />
-          if (classes.includes('language-plotly')) return <PlotlyChart spec={text} />
-        }
-        return <pre>{children}</pre>
+        if (code?.type !== 'element' || code.tagName !== 'code') return <pre>{children}</pre>
+        const classes = code.properties.className
+        const lang = Array.isArray(classes)
+          ? classes.map(String).find((c) => c.startsWith('language-'))?.slice(9)
+          : undefined
+        const text = hastText(code).replace(/\n$/, '')
+        if (!streaming && lang === 'mermaid') return <MermaidDiagram code={text} />
+        if (!streaming && lang === 'plotly') return <PlotlyChart spec={text} />
+        return <CodeBlock lang={lang} text={text}>{children}</CodeBlock>
       },
     }),
     [citations, found, onCite, sessionId, message.id, streaming, paperTitles],
@@ -129,7 +134,7 @@ function MessageView({ message, streaming, hue, active, found, onCite, onShowSel
       )}
       {markdown && (
         <div className="markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={components}>
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={REHYPE_PLUGINS} components={components}>
             {markdown}
           </ReactMarkdown>
         </div>
@@ -141,46 +146,89 @@ function MessageView({ message, streaming, hue, active, found, onCite, onShowSel
   )
 }
 
-/** Copies the answer as Markdown (math stays as $…$ / $$…$$), so it renders when pasted into a Markdown app. */
-function CopyButton({ text }: { text: string }) {
+// Highlight fenced blocks that name a language (no guessing); mermaid and plotly stay plain text for the diagram and chart renderers.
+const REHYPE_PLUGINS: PluggableList = [rehypeKatex, [rehypeHighlight, { detect: false, plainText: ['mermaid', 'plotly'] }]]
+
+/** The text of a hast node, including the text inside highlight spans. */
+function hastText(node: Element | ElementContent): string {
+  if (node.type === 'text') return node.value
+  if (node.type === 'element') return node.children.map(hastText).join('')
+  return ''
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    // Clipboard API unavailable (e.g. not a secure context): fall back to a hidden textarea.
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    ta.remove()
+  }
+}
+
+/** true for 1.5 s after mark() is called: the "Copied" state of a copy button. */
+function useCopied(): [boolean, () => void] {
   const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!copied) return
     const t = setTimeout(() => setCopied(false), 1500)
     return () => clearTimeout(t)
   }, [copied])
+  return [copied, () => setCopied(true)]
+}
 
-  const copy = async () => {
-    const md = citationsToMarkdown(text)
-    try {
-      await navigator.clipboard.writeText(md)
-    } catch {
-      // Clipboard API unavailable (e.g. not a secure context): fall back to a hidden textarea.
-      const ta = document.createElement('textarea')
-      ta.value = md
-      ta.style.position = 'fixed'
-      ta.style.opacity = '0'
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      ta.remove()
-    }
-    setCopied(true)
-  }
+const CopyIcon = ({ copied, size = 14 }: { copied: boolean; size?: number }) =>
+  copied ? (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  ) : (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+    </svg>
+  )
 
+/** A fenced code block with a header: the language and a button that copies the code. */
+function CodeBlock({ lang, text, children }: { lang?: string; text: string; children: ReactNode }) {
+  const [copied, markCopied] = useCopied()
+  return (
+    <div className="code-block">
+      <div className="code-head">
+        <span className="code-lang">{lang ?? 'text'}</span>
+        <button
+          className="code-copy"
+          onClick={() => copyText(text).then(markCopied)}
+          title={copied ? 'Copied' : 'Copy code'}
+          aria-label="Copy code"
+        >
+          <CopyIcon copied={copied} />
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <pre>{children}</pre>
+    </div>
+  )
+}
+
+/** Copies the answer as Markdown (math stays as $…$ / $$…$$), so it renders when pasted into a Markdown app. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, markCopied] = useCopied()
   return (
     <div className="msg-actions">
-      <button className="msg-action" onClick={copy} title={copied ? 'Copied' : 'Copy as Markdown'} aria-label="Copy as Markdown">
-        {copied ? (
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 6 9 17l-5-5" />
-          </svg>
-        ) : (
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="9" y="9" width="12" height="12" rx="2" />
-            <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
-          </svg>
-        )}
+      <button
+        className="msg-action"
+        onClick={() => copyText(citationsToMarkdown(text)).then(markCopied)}
+        title={copied ? 'Copied' : 'Copy as Markdown'}
+        aria-label="Copy as Markdown"
+      >
+        <CopyIcon copied={copied} size={15} />
       </button>
     </div>
   )
