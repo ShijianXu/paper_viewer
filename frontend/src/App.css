@@ -407,7 +407,7 @@ button.icon:hover { color: var(--fg); background: var(--bg-sunken); }
 }
 .paper-add-link input:focus { outline: none; border-color: var(--accent); }
 .paper-add-material { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
-.pdf-scroller { flex: 1; overflow: auto; padding: 16px; }
+.pdf-scroller { flex: 1; overflow: auto; padding: 16px; outline: none; }
 .pdf-scroller .react-pdf__Document { display: flex; flex-direction: column; align-items: center; gap: 16px; width: max-content; min-width: 100%; }
 .pdf-page { box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25); background: white; }
 .pdf-page-placeholder { background: white; }

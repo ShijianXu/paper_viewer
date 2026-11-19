@@ -273,6 +273,39 @@ export default function PdfPane({
     setBar(null)
   }
 
+  // Page keys, each page aligned to the top of the view (as for slides):
+  //   ←/→ and PgUp/PgDn (what presentation clickers send): previous/next page; previous goes
+  //   to the top of the page in view first, if it is scrolled into.
+  //   Home/End: first/last page.
+  // ↑/↓ and Space are left to the browser: smooth scrolling within a page.
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const keys: Record<string, 'prev' | 'next' | 'first' | 'last'> = {
+      ArrowLeft: 'prev',
+      PageUp: 'prev',
+      ArrowRight: 'next',
+      PageDown: 'next',
+      Home: 'first',
+      End: 'last',
+    }
+    const action = keys[e.key]
+    if (!action || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
+    const root = scroller.current
+    if (!root) return
+    e.preventDefault()
+    setBar(null)
+    const top = root.getBoundingClientRect().top + 16 // the scroller's padding
+    const pages = [...root.querySelectorAll<HTMLElement>('[data-page]')]
+    const target =
+      action === 'first'
+        ? pages[0]
+        : action === 'last'
+          ? pages[pages.length - 1]
+          : action === 'next'
+            ? pages.find((el) => el.getBoundingClientRect().top > top + 2)
+            : pages.filter((el) => el.getBoundingClientRect().top < top - 2).pop()
+    if (target) root.scrollTop += target.getBoundingClientRect().top - top
+  }
+
   const zoomBy = (dir: 1 | -1) => {
     const i = ZOOMS.findIndex((z) => z >= zoom - 1e-6)
     setZoom(ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, i + dir))])
@@ -283,12 +316,17 @@ export default function PdfPane({
       <div className="pdf-toolbar">
         <span>{numPages ? `Page ${currentPage} / ${numPages}` : 'Loading…'}</span>
         <span className="spacer" />
-        <span className="muted small hint">Select text to highlight it</span>
+        <span className="muted small hint">Select text to highlight it · ←/→ PgUp/PgDn turn pages</span>
         <button onClick={() => zoomBy(-1)} title="Zoom out" aria-label="Zoom out">−</button>
         <button onClick={() => setZoom(1)} title="Fit width">{Math.round(zoom * 100)}%</button>
         <button onClick={() => zoomBy(1)} title="Zoom in" aria-label="Zoom in">+</button>
       </div>
-      <div className="pdf-scroller" ref={scroller} onScroll={onScroll} onMouseUp={onMouseUp} onClick={onClick}>
+      <div
+        className="pdf-scroller"
+        ref={scroller}
+        tabIndex={0}
+        onKeyDown={onKeyDown}
+        onScroll={onScroll} onMouseUp={onMouseUp} onClick={onClick}>
         <Document
           file={url}
           onLoadSuccess={(pdf) => setNumPages(pdf.numPages)}
